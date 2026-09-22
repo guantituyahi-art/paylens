@@ -19,6 +19,10 @@ main {
   padding: 48px 20px 80px;
 }
 
+main.wide {
+  max-width: 960px;
+}
+
 h1 {
   margin: 0 0 8px;
   font-size: 28px;
@@ -46,7 +50,8 @@ label {
   font-size: 14px;
 }
 
-input {
+input,
+select {
   border: 1px solid #d6d3d1;
   border-radius: 8px;
   padding: 10px 12px;
@@ -122,4 +127,78 @@ a {
   justify-content: space-between;
   align-items: center;
   gap: 12px;
+}
+
+.links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+}
+
+a.current {
+  font-weight: 700;
+}
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: end;
+  margin-top: 12px;
+}
+
+.filters label {
+  min-width: 140px;
+}
+
+.funnel {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.metric strong {
+  display: block;
+  font-size: 32px;
+  line-height: 1.2;
+}
+
+.drop {
+  margin: 16px 0;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: #fff7ed;
+  color: #9a3412;
+}
+
+.chart {
+  width: 100%;
+  height: auto;
+}
+
+.chart-card {
+  margin-top: 16px;
+}
+
+.table-wrap {
+  max-height: 360px;
+  overflow: auto;
+  margin-top: 12px;
+  border: 1px solid #e7e5e4;
+  border-radius: 12px;
+  background: white;
+}
+
+table.daily {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+table.daily th,
+table.daily td {
+  padding: 8px 12px;
+  border-bottom: 1px solid #e7e5e4;
+  text-align: left;
+  font-size: 14px;
 }
