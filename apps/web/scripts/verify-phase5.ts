@@ -20,12 +20,19 @@ import {
 
 const migrationDir = join(dirname(fileURLToPath(import.meta.url)), "../drizzle");
 const retentionSql = readFileSync(join(migrationDir, "0004_phase5_retention.sql"), "utf8");
-assert.match(retentionSql, /pg_cron/);
+assert.match(retentionSql, /paylens_delete_expired_rows/);
+assert.match(retentionSql, /CREATE OR REPLACE FUNCTION paylens_delete_expired_rows\s*\(/i);
 assert.match(retentionSql, /paylens-retention-cleanup/);
+assert.match(retentionSql, /15 3 \* \* \*/);
+assert.match(
+  retentionSql,
+  /cron\.schedule\(\s*'paylens-retention-cleanup'\s*,\s*'15 3 \* \* \*'\s*,\s*\$\$SELECT paylens_delete_expired_rows\(\);\$\$\s*\)/s,
+);
 assert.match(retentionSql, /DELETE FROM events/i);
 assert.match(retentionSql, /DELETE FROM feedback/i);
 assert.match(retentionSql, /retention_days/);
 assert.equal(/DELETE FROM ai_reports/i.test(retentionSql), false);
+assert.equal(/CREATE EXTENSION/i.test(retentionSql), false);
 assert.match(retentionSql, /cron\.unschedule/);
 
 const client = new PGlite();
