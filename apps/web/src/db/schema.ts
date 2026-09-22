@@ -1,5 +1,17 @@
 import { sql } from "drizzle-orm";
-import { check, index, integer, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import {
+  bigserial,
+  check,
+  date,
+  index,
+  integer,
+  pgTable,
+  primaryKey,
+  text,
+  timestamp,
+  uniqueIndex,
+  uuid,
+} from "drizzle-orm/pg-core";
 
 export const developers = pgTable("developers", {
   id: uuid("id").primaryKey(),
@@ -41,4 +53,43 @@ export const projectKeys = pgTable(
     index("project_keys_project_id_idx").on(table.projectId),
     check("project_keys_status_check", sql`${table.status} in ('active', 'deprecated', 'revoked')`),
   ],
+);
+
+export const events = pgTable(
+  "events",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    eventId: uuid("event_id").notNull(),
+    anonymousUserId: text("anonymous_user_id").notNull(),
+    paywallSessionId: uuid("paywall_session_id").notNull(),
+    eventName: text("event_name").notNull(),
+    platform: text("platform").notNull(),
+    appVersion: text("app_version").notNull(),
+    paywallVersion: text("paywall_version"),
+    productId: text("product_id"),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
+    receivedAt: timestamp("received_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("events_project_event_unique").on(table.projectId, table.eventId),
+    index("events_project_occurred_idx").on(table.projectId, table.occurredAt),
+    index("events_project_name_occurred_idx").on(table.projectId, table.eventName, table.occurredAt),
+    index("events_project_session_idx").on(table.projectId, table.paywallSessionId),
+    index("events_project_user_idx").on(table.projectId, table.anonymousUserId),
+  ],
+);
+
+export const projectDailyUsage = pgTable(
+  "project_daily_usage",
+  {
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    day: date("day").notNull(),
+    eventCount: integer("event_count").notNull().default(0),
+  },
+  (table) => [primaryKey({ columns: [table.projectId, table.day] })],
 );

@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { createProjectAction, signOutAction } from "@/app/projects/actions";
 import { getDatabaseUrl, getDb } from "@/db/client";
 import { requireUser } from "@/lib/auth";
@@ -85,6 +86,9 @@ export default async function ProjectsPage({
       {projects.map((project) => (
         <article className="card" key={project.id}>
           <strong>{project.name}</strong>
+          <p>
+            <Link href={`/projects/${project.id}/setup`}>接入引导</Link>
+          </p>
           <p className="muted">时区 {project.timezone}</p>
           {project.keys.length === 0 ? <p className="muted">还没有 Client Key。</p> : null}
           {project.keys.map((key) => (

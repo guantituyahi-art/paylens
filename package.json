@@ -6,6 +6,6 @@
     "dev": "corepack pnpm --dir apps/web dev",
     "build": "corepack pnpm --dir apps/web build",
     "db:migrate": "corepack pnpm --dir apps/web db:migrate",
-    "verify": "corepack pnpm --dir apps/web verify"
+    "verify": "corepack pnpm --dir apps/web verify && corepack pnpm --dir packages/sdk verify"
   }
 }

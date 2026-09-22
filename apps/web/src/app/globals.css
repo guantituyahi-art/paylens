@@ -105,6 +105,18 @@ code {
   font-size: 14px;
 }
 
+pre {
+  white-space: pre-wrap;
+  background: white;
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid #e7e5e4;
+}
+
+a {
+  color: #1c1917;
+}
+
 .row {
   display: flex;
   justify-content: space-between;

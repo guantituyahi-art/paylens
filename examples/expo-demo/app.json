@@ -1,0 +1,10 @@
+{
+  "expo": {
+    "name": "PayLens Demo",
+    "slug": "paylens-demo",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true
+  }
+}
