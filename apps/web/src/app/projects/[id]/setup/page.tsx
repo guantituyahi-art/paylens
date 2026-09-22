@@ -36,6 +36,8 @@ export default async function SetupPage({ params }: { params: Promise<{ id: stri
         <Link href="/projects">返回项目</Link>
         {" · "}
         <Link href={`/projects/${project.id}/overview`}>概览</Link>
+        {" · "}
+        <Link href={`/projects/${project.id}/insights`}>报告</Link>
       </p>
       <h1>接入 {project.name}</h1>
       <p className="muted">时区 {project.timezone}</p>

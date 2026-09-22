@@ -5,6 +5,7 @@ import {
   date,
   index,
   integer,
+  jsonb,
   pgTable,
   primaryKey,
   text,
@@ -107,6 +108,36 @@ export const feedback = pgTable(
     index("feedback_project_reason_occurred_idx").on(table.projectId, table.reasonCode, table.occurredAt),
     index("feedback_project_session_idx").on(table.projectId, table.paywallSessionId),
     index("feedback_project_user_idx").on(table.projectId, table.anonymousUserId),
+  ],
+);
+
+export const aiReports = pgTable(
+  "ai_reports",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    timezone: text("timezone").notNull(),
+    periodStart: date("period_start").notNull(),
+    periodEnd: date("period_end").notNull(),
+    compareStart: date("compare_start").notNull(),
+    compareEnd: date("compare_end").notNull(),
+    filters: jsonb("filters").notNull().default({}),
+    status: text("status").notNull(),
+    model: text("model"),
+    promptVersion: text("prompt_version"),
+    inputSnapshot: jsonb("input_snapshot"),
+    output: jsonb("output"),
+    error: text("error"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("ai_reports_project_created_idx").on(table.projectId, table.createdAt),
+    check(
+      "ai_reports_status_check",
+      sql`${table.status} in ('pending', 'done', 'failed', 'insufficient_data')`,
+    ),
   ],
 );
 

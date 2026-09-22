@@ -1,6 +1,6 @@
 # PayLens V0.1 设计文档
 
-> 状态：Phase 3 已完成，等待确认后再进入 Phase 4。
+> 状态：Phase 4 已完成，等待确认后再进入 Phase 5。
 > 版本：v0.1-design-r3（2026-09-22）
 > 约束：Small but real。V0.1 只有一个使命——帮助独立 App 开发者更清楚地知道：用户为什么没有完成订阅。
 
@@ -865,7 +865,7 @@ V0.1 只实现一个支持 JSON structured output 的供应商；供应商名与
 
 ## K. 开发阶段
 
-每阶段有"完成标准"，做完停下审查。**当前状态：Phase 3 已完成。等待确认后再进入 Phase 4。**
+每阶段有"完成标准"，做完停下审查。**当前状态：Phase 4 已完成。等待确认后再进入 Phase 5。**
 
 ```text
 Phase 0  骨架（1–2 天）
@@ -983,4 +983,4 @@ Phase 6  真实 App 接入与验证（持续 2–4 周）
 | Session 终止 | `paywall_closed` 与 `purchase_success` 都终止 session；窗口内购买最终归 purchased |
 | 孤儿事件 | 无 `paywall_viewed` 的事件入库并标记 orphan，只用于接入健康度 |
 | 重试 | 仅 `error_code=key_revoked` 停止该 key 重试；网络错误、5xx、429 可重试 |
-| 下一步 | Phase 3 已完成，等待确认后再进入 Phase 4 |
+| 下一步 | Phase 4 已完成，等待确认后再进入 Phase 5 |

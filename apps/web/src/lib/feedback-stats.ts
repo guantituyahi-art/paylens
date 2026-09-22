@@ -1,9 +1,9 @@
 import { sql } from "drizzle-orm";
 import type { Database } from "@/db/client";
 import { previousPeriod, type Period } from "@/lib/period";
+import { MIN_REASON_COUNT } from "@/lib/thresholds";
 
-/** 某个原因本期或上期少于这个条数时，页面标成小样本，不把变化当成趋势。 */
-export const MIN_REASON_COUNT = 30;
+export { MIN_REASON_COUNT };
 export const COMMENT_PAGE_SIZE = 50;
 
 export type ReasonStat = {

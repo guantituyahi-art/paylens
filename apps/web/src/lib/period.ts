@@ -40,6 +40,12 @@ export function addDays(isoDate: string, days: number): string {
   return `${nextYear}-${nextMonth}-${nextDay}`;
 }
 
+export function completeReportPeriod(timezone: string, kind: "7d" | "30d", now: Date): Period {
+  const yesterday = addDays(formatLocalDate(now, timezone), -1);
+  const days = kind === "30d" ? 30 : 7;
+  return { from: addDays(yesterday, -(days - 1)), to: yesterday };
+}
+
 export function previousPeriod(period: Period): Period {
   const start = Date.parse(`${period.from}T00:00:00Z`);
   const end = Date.parse(`${period.to}T00:00:00Z`);
