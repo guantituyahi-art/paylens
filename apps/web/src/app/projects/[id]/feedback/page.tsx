@@ -78,6 +78,8 @@ export default async function FeedbackPage({
         {" · "}
         <Link href={`/projects/${project.id}/insights`}>报告</Link>
         {" · "}
+        <Link href={`/projects/${project.id}/settings`}>设置</Link>
+        {" · "}
         <Link href={`/projects/${project.id}/setup`}>接入引导</Link>
       </p>
       <h1>{project.name} 的反馈</h1>

@@ -38,10 +38,33 @@ export default async function SetupPage({ params }: { params: Promise<{ id: stri
         <Link href={`/projects/${project.id}/overview`}>概览</Link>
         {" · "}
         <Link href={`/projects/${project.id}/insights`}>报告</Link>
+        {" · "}
+        <Link href={`/projects/${project.id}/settings`}>设置</Link>
       </p>
       <h1>接入 {project.name}</h1>
       <p className="muted">时区 {project.timezone}</p>
       <IngestionStatus projectId={project.id} expectedCount={EVENT_NAMES.length} />
+
+      <h2>隐私提示（给开发者，非法律意见）</h2>
+      <ul>
+        <li>
+          App Store 隐私标签：Identifiers → User ID（不与用户关联，用于分析）、Usage Data → Product
+          Interaction；若开启文字评论，再勾选 User Content → Other User Content。不涉及 ATT（无 IDFA、无跨
+          App 追踪）。
+        </li>
+        <li>GDPR：分析类处理需要合法基础；隐私政策里应提及 PayLens 作为处理方。</li>
+        <li>
+          PIPL：若终端用户在中国大陆而服务器在境外，涉及跨境传输，请结合你的部署位置自行评估。
+        </li>
+        <li>
+          开发者与 PayLens 之间理论上需要 DPA；V0.1 自用可先不做，对外开放前再补。
+        </li>
+        <li>
+          数据保留：events / feedback 默认 365 天后删除；可按 anonymous_user_id 删除，也可清空项目数据。详见
+          <Link href={`/projects/${project.id}/settings`}>项目设置</Link>。
+        </li>
+      </ul>
+
       <h2>1. 安装</h2>
       <pre>{`pnpm add @paylens/react-native @react-native-async-storage/async-storage
 pnpm add expo-application`}</pre>

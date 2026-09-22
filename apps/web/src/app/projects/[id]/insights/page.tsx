@@ -73,6 +73,8 @@ export default async function InsightsPage({
         {" · "}
         <Link href={`/projects/${project.id}/feedback`}>反馈</Link>
         {" · "}
+        <Link href={`/projects/${project.id}/settings`}>设置</Link>
+        {" · "}
         <Link href={`/projects/${project.id}/setup`}>接入引导</Link>
       </p>
       <h1>{project.name} 的报告</h1>
