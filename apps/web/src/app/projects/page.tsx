@@ -89,6 +89,8 @@ export default async function ProjectsPage({
           <p>
             <Link href={`/projects/${project.id}/overview`}>概览</Link>
             {" · "}
+            <Link href={`/projects/${project.id}/feedback`}>反馈</Link>
+            {" · "}
             <Link href={`/projects/${project.id}/setup`}>接入引导</Link>
           </p>
           <p className="muted">时区 {project.timezone}</p>

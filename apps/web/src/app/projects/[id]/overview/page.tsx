@@ -172,6 +172,8 @@ export default async function OverviewPage({
       <p>
         <Link href="/projects">项目</Link>
         {" · "}
+        <Link href={`/projects/${project.id}/feedback`}>反馈</Link>
+        {" · "}
         <Link href={`/projects/${project.id}/setup`}>接入引导</Link>
       </p>
       <h1>{project.name}</h1>

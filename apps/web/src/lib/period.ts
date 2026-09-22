@@ -40,6 +40,14 @@ export function addDays(isoDate: string, days: number): string {
   return `${nextYear}-${nextMonth}-${nextDay}`;
 }
 
+export function previousPeriod(period: Period): Period {
+  const start = Date.parse(`${period.from}T00:00:00Z`);
+  const end = Date.parse(`${period.to}T00:00:00Z`);
+  const days = Math.round((end - start) / 86_400_000) + 1;
+  const to = addDays(period.from, -1);
+  return { from: addDays(to, -(days - 1)), to };
+}
+
 export function eachDate(from: string, to: string): string[] {
   const dates: string[] = [];
   let cursor = from;

@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "db:migrate": "tsx scripts/migrate.ts",
-    "verify": "tsx scripts/verify-phase0.ts && tsx scripts/verify-phase1.ts && tsx scripts/verify-phase2.ts"
+    "verify": "tsx scripts/verify-phase0.ts && tsx scripts/verify-phase1.ts && tsx scripts/verify-phase2.ts && tsx scripts/verify-phase3.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.7.0",

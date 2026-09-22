@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import type { Database } from "@/db/client";
 import { eachDate, formatLocalDate, type Period } from "@/lib/period";
+import { countSessionFeedback } from "@/lib/feedback-stats";
 import { getIngestionHealth } from "@/lib/ingestion-health";
 
 /** 关闭后仍把 purchase_success 算进同一次 Paywall 的时间窗。 */
@@ -186,7 +187,11 @@ export async function getOverview(
         : { step: "click_to_purchase" as const, lost: clickLost, lost_rate: rate(clickLost, clicked) };
 
   const health = await getIngestionHealth(db, project.id);
-  const feedbackCount = 0;
+  const feedbackCount = await countSessionFeedback(db, project, {
+    period: input.period,
+    appVersion: input.appVersion,
+    paywallVersion: input.paywallVersion,
+  });
 
   return {
     timezone: project.timezone,

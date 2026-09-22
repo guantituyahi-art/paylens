@@ -82,6 +82,34 @@ export const events = pgTable(
   ],
 );
 
+export const feedback = pgTable(
+  "feedback",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    feedbackId: uuid("feedback_id").notNull(),
+    anonymousUserId: text("anonymous_user_id").notNull(),
+    paywallSessionId: uuid("paywall_session_id").notNull(),
+    reasonCode: text("reason_code").notNull(),
+    reasonLabel: text("reason_label"),
+    comment: text("comment"),
+    platform: text("platform").notNull(),
+    appVersion: text("app_version").notNull(),
+    paywallVersion: text("paywall_version"),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
+    receivedAt: timestamp("received_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("feedback_project_feedback_unique").on(table.projectId, table.feedbackId),
+    index("feedback_project_occurred_idx").on(table.projectId, table.occurredAt),
+    index("feedback_project_reason_occurred_idx").on(table.projectId, table.reasonCode, table.occurredAt),
+    index("feedback_project_session_idx").on(table.projectId, table.paywallSessionId),
+    index("feedback_project_user_idx").on(table.projectId, table.anonymousUserId),
+  ],
+);
+
 export const projectDailyUsage = pgTable(
   "project_daily_usage",
   {

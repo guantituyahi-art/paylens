@@ -14,6 +14,8 @@ export type SessionState = {
   paywallVersion: string | null;
   closedAt: number | null;
   purchased: boolean;
+  /** 只有 paywall_viewed 开启的 session 才能出现退出调查。 */
+  viewed: boolean;
 } | null;
 
 export type TrackDecision = {
@@ -29,6 +31,20 @@ function isLive(state: SessionState) {
 
 function inPurchaseWindow(state: SessionState, now: number) {
   return Boolean(state && !state.purchased && state.closedAt != null && now - state.closedAt <= PURCHASE_WINDOW_MS);
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** 调查只在「看到并关闭、且没有购买」的这次 Paywall 上出现，并遵守本地冷却期。 */
+export function canShowExitSurvey(
+  state: SessionState,
+  lastShownAt: number | null,
+  now: number,
+  cooldownDays: number,
+) {
+  if (!state?.viewed || state.purchased || state.closedAt == null) return false;
+  if (lastShownAt == null) return true;
+  return now - lastShownAt >= cooldownDays * DAY_MS;
 }
 
 export function applyTrack(input: {
@@ -50,7 +66,7 @@ export function applyTrack(input: {
       };
     }
     const paywallVersion = input.paywallVersion ?? defaultPaywallVersion;
-    const next = { id: createId(), paywallVersion, closedAt: null, purchased: false };
+    const next = { id: createId(), paywallVersion, closedAt: null, purchased: false, viewed: true };
     return { state: next, sessionId: next.id, paywallVersion, warn: null };
   }
 
@@ -69,6 +85,7 @@ export function applyTrack(input: {
       paywallVersion: defaultPaywallVersion,
       closedAt: null,
       purchased: true,
+      viewed: false,
     };
     return {
       state: next,
@@ -93,6 +110,7 @@ export function applyTrack(input: {
       paywallVersion: defaultPaywallVersion,
       closedAt: now,
       purchased: false,
+      viewed: false,
     };
     return {
       state: next,
@@ -111,6 +129,7 @@ export function applyTrack(input: {
     paywallVersion: defaultPaywallVersion,
     closedAt: null,
     purchased: false,
+    viewed: false,
   };
   return {
     state: next,

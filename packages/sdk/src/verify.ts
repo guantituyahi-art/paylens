@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createPayLens, type KeyValueStorage } from "./index";
+import { shouldAskComment } from "./survey";
 import { resolveAppVersion } from "./version";
 
 assert.equal(resolveAppVersion("1.0.1", () => "9.9.9"), "1.0.1");
@@ -120,3 +121,62 @@ assert.equal(retry.debugState().queue.length, 0);
 assert.equal(calls, callsAfterRevoke + 1);
 retry.stop();
 console.log("ok sdk retry policy");
+
+assert.equal(shouldAskComment("other", true), true);
+assert.equal(shouldAskComment("too_expensive", true), false);
+assert.equal(shouldAskComment("other", false), false);
+
+const surveyClock = { value: new Date("2026-09-22T08:00:00.000Z") };
+const surveySent: unknown[] = [];
+const surveyClient = createPayLens({
+  storage: memoryStorage(),
+  fetch: async (input, init) => {
+    surveySent.push({ url: String(input), body: JSON.parse(String(init?.body)) });
+    return response(200, { accepted: true });
+  },
+  now: () => surveyClock.value,
+  createId: () => "66666666-6666-4666-8666-666666666666",
+  readAppVersion: () => "1.0.0",
+  platform: "ios",
+  autoFlush: false,
+});
+surveyClient.init({ clientKey: "pl_pub_survey", paywallVersion: "A" });
+await surveyClient.flush();
+surveyClient.track("paywall_viewed");
+assert.equal(surveyClient.shouldShowExitSurvey(), false);
+surveyClient.track("paywall_closed");
+assert.equal(surveyClient.shouldShowExitSurvey(), true);
+surveyClient.markExitSurveyShown();
+surveyClient.track("paywall_viewed");
+surveyClient.track("paywall_closed");
+assert.equal(surveyClient.shouldShowExitSurvey(), false);
+surveyClock.value = new Date("2026-09-29T08:00:00.000Z");
+assert.equal(surveyClient.shouldShowExitSurvey(), true);
+
+const purchased = createPayLens({
+  storage: memoryStorage(),
+  fetch: async () => response(200, { accepted: true }),
+  now: () => new Date("2026-09-22T08:00:00.000Z"),
+  createId: () => "77777777-7777-4777-8777-777777777777",
+  readAppVersion: () => "1.0.0",
+  platform: "ios",
+  autoFlush: false,
+});
+purchased.init({ clientKey: "pl_pub_purchased" });
+await purchased.flush();
+purchased.track("paywall_viewed");
+purchased.track("purchase_success", { productId: "pro_monthly" });
+purchased.track("paywall_closed");
+assert.equal(purchased.shouldShowExitSurvey(), false);
+purchased.stop();
+
+surveyClient.submitFeedback("other", { label: "其他", comment: "还没用过导出" });
+await surveyClient.flush();
+const feedbackCall = surveySent.find((item) => (item as { url: string }).url.endsWith("/feedback")) as {
+  body: { reason_code: string; comment: string; paywall_session_id: string };
+};
+assert.equal(feedbackCall.body.reason_code, "other");
+assert.equal(feedbackCall.body.comment, "还没用过导出");
+assert.equal(surveyClient.debugState().feedbackQueue.length, 0);
+surveyClient.stop();
+console.log("ok sdk exit survey");

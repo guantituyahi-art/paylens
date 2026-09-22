@@ -1,4 +1,6 @@
-import { applyTrack, type EventName, type SessionState } from "./session";
+import { applyTrack, canShowExitSurvey, type EventName, type SessionState } from "./session";
+import { bindSurveyBridge, PayLensExitSurvey } from "./survey-ui";
+import { clampComment, normalizeSurvey, REASON_CODE_PATTERN, type SurveyConfig } from "./survey";
 import { createEventId, readExpoApplicationVersion, resolveAppVersion } from "./version";
 
 export const DEFAULT_ENDPOINT = "http://localhost:3000/v1";
@@ -15,6 +17,12 @@ export type PayLensOptions = {
   appVersion?: string;
   paywallVersion?: string;
   endpoint?: string;
+  survey?: {
+    question?: string;
+    options?: { code: string; label: string }[];
+    allowComment?: boolean;
+    cooldownDays?: number;
+  };
 };
 
 export type KeyValueStorage = {
@@ -34,11 +42,26 @@ type QueuedEvent = {
   occurred_at: string;
 };
 
+type QueuedFeedback = {
+  feedback_id: string;
+  anonymous_user_id: string;
+  paywall_session_id: string;
+  reason_code: string;
+  reason_label?: string;
+  comment?: string;
+  platform: string;
+  app_version: string;
+  paywall_version?: string;
+  occurred_at: string;
+};
+
 type PersistedState = {
   anonymousUserId: string;
   queue: QueuedEvent[];
+  feedbackQueue: QueuedFeedback[];
   session: SessionState;
   pausedKey: string | null;
+  lastSurveyShownAt: number | null;
 };
 
 export type PayLensDeps = {
@@ -107,8 +130,12 @@ export function createPayLens(deps: PayLensDeps = {}) {
   let options: PayLensOptions | null = null;
   let anonymousUserId = "";
   let queue: QueuedEvent[] = [];
+  let feedbackQueue: QueuedFeedback[] = [];
   let session: SessionState = null;
   let pausedKey: string | null = null;
+  let lastSurveyShownAt: number | null = null;
+  let survey: SurveyConfig = normalizeSurvey();
+  let ready = false;
   let pending = Promise.resolve();
   let flushing = false;
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -122,7 +149,7 @@ export function createPayLens(deps: PayLensDeps = {}) {
 
   async function persist() {
     if (!storageRef) return;
-    const snapshot: PersistedState = { anonymousUserId, queue, session, pausedKey };
+    const snapshot: PersistedState = { anonymousUserId, queue, feedbackQueue, session, pausedKey, lastSurveyShownAt };
     await storageRef.setItem(STORAGE_KEY, JSON.stringify(snapshot));
   }
 
@@ -130,7 +157,7 @@ export function createPayLens(deps: PayLensDeps = {}) {
     if (!autoFlush) return;
     if (timer) clearTimeout(timer);
     timer = setTimeout(() => {
-      void flushOnce();
+      void flushPending();
     }, delay);
   }
 
@@ -194,11 +221,100 @@ export function createPayLens(deps: PayLensDeps = {}) {
     }
   }
 
+  async function flushFeedback() {
+    if (!options || pausedKey === options.clientKey || feedbackQueue.length === 0) return;
+    const item = feedbackQueue[0];
+    if (!item) return;
+    const endpoint = (options.endpoint ?? DEFAULT_ENDPOINT).replace(/\/$/, "");
+    try {
+      const response = await fetchImpl(`${endpoint}/feedback`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${options.clientKey}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(item),
+      });
+      if (response.status === 401) {
+        const body = (await response.json().catch(() => ({}))) as { error_code?: string };
+        if (body.error_code === "key_revoked") {
+          pausedKey = options.clientKey;
+          await persist();
+          console.warn("[PayLens] Client Key 已撤销，已停止这把 key 的重试。队列仍保留在本地。");
+          return;
+        }
+        schedule(backoffMs);
+        backoffMs = Math.min(backoffMs * 2, MAX_BACKOFF_MS);
+        return;
+      }
+      if (response.status === 400 || response.status === 413) {
+        feedbackQueue.shift();
+        await persist();
+        console.warn("[PayLens] 这条反馈被服务器拒绝，已丢弃。");
+        backoffMs = baseBackoffMs;
+        if (feedbackQueue.length > 0) void flushFeedback();
+        return;
+      }
+      if (!response.ok) {
+        const retryAfter = Number(response.headers.get("retry-after"));
+        const delay = response.status === 429 && Number.isFinite(retryAfter) ? retryAfter * 1000 : backoffMs;
+        schedule(delay);
+        backoffMs = Math.min(backoffMs * 2, MAX_BACKOFF_MS);
+        return;
+      }
+      feedbackQueue.shift();
+      await persist();
+      backoffMs = baseBackoffMs;
+      if (feedbackQueue.length > 0) void flushFeedback();
+    } catch {
+      schedule(backoffMs);
+      backoffMs = Math.min(backoffMs * 2, MAX_BACKOFF_MS);
+    }
+  }
+
+  async function flushPending() {
+    await flushOnce();
+    await flushFeedback();
+  }
+
+  function applyEvent(eventName: EventName, extra?: { productId?: string; paywallVersion?: string }) {
+    if (!options) return;
+    const occurred = now();
+    const decision = applyTrack({
+      state: session,
+      eventName,
+      now: occurred.getTime(),
+      createId,
+      defaultPaywallVersion: options.paywallVersion ?? null,
+      paywallVersion: extra?.paywallVersion,
+    });
+    session = decision.state;
+    if (decision.warn) console.warn(`[PayLens] ${decision.warn}`);
+    if (!decision.sessionId) return;
+    const event: QueuedEvent = {
+      event_id: createId(),
+      event_name: eventName,
+      anonymous_user_id: anonymousUserId,
+      paywall_session_id: decision.sessionId,
+      platform,
+      app_version: resolveAppVersion(options.appVersion, readAppVersion),
+      occurred_at: occurred.toISOString(),
+    };
+    if (decision.paywallVersion) event.paywall_version = decision.paywallVersion;
+    if (extra?.productId && (eventName === "subscribe_clicked" || eventName === "purchase_success")) {
+      event.product_id = extra.productId;
+    }
+    queue.push(event);
+    if (queue.length > MAX_QUEUE) queue.splice(0, queue.length - MAX_QUEUE);
+  }
+
   return {
     init(next: PayLensOptions) {
       if (!next.clientKey) throw new Error("PayLens.init 需要 clientKey");
       if (!storageRef) storageRef = loadAsyncStorage();
       options = next;
+      survey = normalizeSurvey(next.survey);
+      ready = false;
       remember(async () => {
         const saved = await storageRef?.getItem(STORAGE_KEY);
         if (saved) {
@@ -206,67 +322,101 @@ export function createPayLens(deps: PayLensDeps = {}) {
             const parsed = JSON.parse(saved) as PersistedState;
             anonymousUserId = parsed.anonymousUserId || anonymousUserId;
             queue = parsed.queue ?? [];
+            feedbackQueue = parsed.feedbackQueue ?? [];
             session = parsed.session ?? null;
             pausedKey = parsed.pausedKey ?? null;
+            lastSurveyShownAt = typeof parsed.lastSurveyShownAt === "number" ? parsed.lastSurveyShownAt : null;
           } catch {
             console.warn("[PayLens] 本地队列无法读取，已重新开始");
           }
         }
         if (!anonymousUserId) anonymousUserId = createId();
         if (pausedKey && pausedKey !== next.clientKey) pausedKey = null;
+        ready = true;
         await persist();
       });
       if (autoFlush && !interval) {
-        interval = setInterval(() => void flushOnce(), FLUSH_EVERY_MS);
-        stopWatch = watchBackground(() => void flushOnce()) ?? (() => undefined);
+        interval = setInterval(() => void flushPending(), FLUSH_EVERY_MS);
+        stopWatch = watchBackground(() => void flushPending()) ?? (() => undefined);
       }
     },
     track(eventName: EventName, extra?: { productId?: string; paywallVersion?: string }) {
+      if (!options) {
+        console.warn("[PayLens] 请先调用 init");
+        return;
+      }
+      const save = async () => {
+        applyEvent(eventName, extra);
+        await persist();
+        if (autoFlush && queue.length >= 10) void flushOnce();
+      };
+      if (!ready) {
+        remember(save);
+        return;
+      }
+      applyEvent(eventName, extra);
+      remember(async () => {
+        await persist();
+        if (autoFlush && queue.length >= 10) void flushOnce();
+      });
+    },
+    shouldShowExitSurvey() {
+      if (!ready) return false;
+      return canShowExitSurvey(session, lastSurveyShownAt, now().getTime(), survey.cooldownDays);
+    },
+    markExitSurveyShown() {
+      lastSurveyShownAt = now().getTime();
+      remember(() => persist());
+    },
+    submitFeedback(reasonCode: string, extra?: { label?: string; comment?: string }) {
       remember(async () => {
         if (!options) {
           console.warn("[PayLens] 请先调用 init");
           return;
         }
-        const occurred = now();
-        const decision = applyTrack({
-          state: session,
-          eventName,
-          now: occurred.getTime(),
-          createId,
-          defaultPaywallVersion: options.paywallVersion ?? null,
-          paywallVersion: extra?.paywallVersion,
-        });
-        session = decision.state;
-        if (decision.warn) console.warn(`[PayLens] ${decision.warn}`);
-        if (!decision.sessionId) {
-          await persist();
+        if (!REASON_CODE_PATTERN.test(reasonCode)) {
+          console.warn("[PayLens] reason code 不合法，反馈没有发送");
           return;
         }
-        const event: QueuedEvent = {
-          event_id: createId(),
-          event_name: eventName,
+        if (!session) {
+          console.warn("[PayLens] 没有 Paywall session，反馈没有发送");
+          return;
+        }
+        const comment = clampComment(extra?.comment);
+        const item: QueuedFeedback = {
+          feedback_id: createId(),
           anonymous_user_id: anonymousUserId,
-          paywall_session_id: decision.sessionId,
+          paywall_session_id: session.id,
+          reason_code: reasonCode,
           platform,
           app_version: resolveAppVersion(options.appVersion, readAppVersion),
-          occurred_at: occurred.toISOString(),
+          occurred_at: now().toISOString(),
         };
-        if (decision.paywallVersion) event.paywall_version = decision.paywallVersion;
-        if (extra?.productId && (eventName === "subscribe_clicked" || eventName === "purchase_success")) {
-          event.product_id = extra.productId;
-        }
-        queue.push(event);
-        if (queue.length > MAX_QUEUE) queue.splice(0, queue.length - MAX_QUEUE);
+        const label = extra?.label?.trim();
+        if (label) item.reason_label = label;
+        if (comment) item.comment = comment;
+        if (session.paywallVersion) item.paywall_version = session.paywallVersion;
+        feedbackQueue.push(item);
         await persist();
-        if (autoFlush && queue.length >= 10) void flushOnce();
+        if (autoFlush) void flushFeedback();
       });
+    },
+    surveyConfig() {
+      return survey;
     },
     async flush() {
       await pending;
-      await flushOnce();
+      await flushPending();
     },
     debugState() {
-      return { queue: [...queue], session, pausedKey, anonymousUserId };
+      return {
+        queue: [...queue],
+        feedbackQueue: [...feedbackQueue],
+        session,
+        pausedKey,
+        anonymousUserId,
+        lastSurveyShownAt,
+      };
     },
     stop() {
       if (timer) clearTimeout(timer);
@@ -278,12 +428,29 @@ export function createPayLens(deps: PayLensDeps = {}) {
 
 const singleton = createPayLens();
 
+bindSurveyBridge({
+  getSurvey: () => singleton.surveyConfig(),
+  markShown: () => singleton.markExitSurveyShown(),
+  submit: (reasonCode, extra) => singleton.submitFeedback(reasonCode, extra),
+});
+
+export { PayLensExitSurvey };
+
 export const PayLens = {
   init(options: PayLensOptions) {
     singleton.init(options);
   },
   track(eventName: EventName, extra?: { productId?: string; paywallVersion?: string }) {
     singleton.track(eventName, extra);
+  },
+  shouldShowExitSurvey() {
+    return singleton.shouldShowExitSurvey();
+  },
+  markExitSurveyShown() {
+    singleton.markExitSurveyShown();
+  },
+  submitFeedback(reasonCode: string, extra?: { label?: string; comment?: string }) {
+    singleton.submitFeedback(reasonCode, extra);
   },
   flush() {
     return singleton.flush();

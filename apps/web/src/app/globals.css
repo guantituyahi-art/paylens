@@ -202,3 +202,28 @@ table.daily td {
   text-align: left;
   font-size: 14px;
 }
+
+.reason {
+  display: grid;
+  grid-template-columns: minmax(120px, 180px) 1fr auto;
+  gap: 8px 12px;
+  align-items: center;
+  margin: 10px 0;
+}
+
+.reason-track {
+  height: 10px;
+  border-radius: 999px;
+  background: #e7e5e4;
+  overflow: hidden;
+}
+
+.reason-fill {
+  height: 10px;
+  border-radius: 999px;
+  background: #1c1917;
+}
+
+.comment {
+  margin-top: 12px;
+}
