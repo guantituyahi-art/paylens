@@ -1,0 +1,11 @@
+{
+  "name": "paylens",
+  "private": true,
+  "packageManager": "pnpm@10.15.1",
+  "scripts": {
+    "dev": "corepack pnpm --dir apps/web dev",
+    "build": "corepack pnpm --dir apps/web build",
+    "db:migrate": "corepack pnpm --dir apps/web db:migrate",
+    "verify": "corepack pnpm --dir apps/web verify"
+  }
+}
