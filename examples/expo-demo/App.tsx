@@ -29,6 +29,10 @@ export default function App() {
           onPress={() => PayLens.track("purchase_success", { productId: "pro_monthly" })}
         />
         <Button
+          title="支付失败"
+          onPress={() => PayLens.track("purchase_failed", { productId: "pro_monthly", failureKind: "payment_error" })}
+        />
+        <Button
           title="关闭 Paywall"
           onPress={() => {
             PayLens.track("paywall_closed");

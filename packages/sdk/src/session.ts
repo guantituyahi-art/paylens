@@ -3,7 +3,11 @@ export const EVENT_NAMES = [
   "subscribe_clicked",
   "purchase_success",
   "paywall_closed",
+  "purchase_failed",
 ] as const;
+
+export const FAILURE_KINDS = ["user_cancelled", "payment_error", "unknown"] as const;
+export type FailureKind = (typeof FAILURE_KINDS)[number];
 
 export type EventName = (typeof EVENT_NAMES)[number];
 
@@ -92,6 +96,26 @@ export function applyTrack(input: {
       sessionId: next.id,
       paywallVersion: next.paywallVersion,
       warn: "没有打开的 Paywall session，已单独记录 purchase_success",
+    };
+  }
+
+  if (eventName === "purchase_failed") {
+    if (isLive(state)) {
+      const current = state as NonNullable<SessionState>;
+      return { state: current, sessionId: current.id, paywallVersion: current.paywallVersion, warn: null };
+    }
+    const next = {
+      id: createId(),
+      paywallVersion: defaultPaywallVersion,
+      closedAt: null,
+      purchased: false,
+      viewed: false,
+    };
+    return {
+      state: next,
+      sessionId: next.id,
+      paywallVersion: next.paywallVersion,
+      warn: "没有打开的 Paywall session，已单独记录 purchase_failed",
     };
   }
 

@@ -21,6 +21,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
       to: url.searchParams.get("to"),
       app_version: url.searchParams.get("app_version"),
       paywall_version: url.searchParams.get("paywall_version"),
+      platform: url.searchParams.get("platform"),
     });
     if (!parsed.ok) return Response.json({ error_code: "invalid_range" }, { status: 400 });
     return Response.json(await getFeedbackSummary(db, project, { ...parsed.query, period: parsed.query.period }));

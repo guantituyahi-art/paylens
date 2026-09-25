@@ -36,7 +36,7 @@ assert.equal(/CREATE EXTENSION/i.test(retentionSql), false);
 assert.match(retentionSql, /cron\.unschedule/);
 
 const client = new PGlite();
-for (const file of ["0000_phase0.sql", "0001_phase1.sql", "0002_phase3.sql", "0003_phase4.sql"]) {
+for (const file of ["0000_phase0.sql", "0001_phase1.sql", "0002_phase3.sql", "0003_phase4.sql", "0005_phase7.sql"]) {
   const statements = readFileSync(join(migrationDir, file), "utf8")
     .split("--> statement-breakpoint")
     .map((statement) => statement.trim())

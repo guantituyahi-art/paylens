@@ -22,7 +22,7 @@ assert.deepEqual(previousPeriod({ from: "2026-09-20", to: "2026-09-21" }), {
 
 const client = new PGlite();
 const migrationDir = join(dirname(fileURLToPath(import.meta.url)), "../drizzle");
-for (const file of ["0000_phase0.sql", "0001_phase1.sql", "0002_phase3.sql"]) {
+for (const file of ["0000_phase0.sql", "0001_phase1.sql", "0002_phase3.sql", "0005_phase7.sql"]) {
   const statements = readFileSync(join(migrationDir, file), "utf8")
     .split("--> statement-breakpoint")
     .map((statement) => statement.trim())

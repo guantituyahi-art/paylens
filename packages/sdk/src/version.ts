@@ -1,3 +1,5 @@
+export const SDK_VERSION = "0.2.0";
+
 export function resolveAppVersion(explicit: string | undefined, readNative: () => string | null) {
   const given = explicit?.trim();
   if (given) return given.slice(0, 32);

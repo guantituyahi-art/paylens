@@ -28,7 +28,7 @@ assert.equal(reversed.ok, false);
 
 const client = new PGlite();
 const migrationDir = join(dirname(fileURLToPath(import.meta.url)), "../drizzle");
-for (const file of ["0000_phase0.sql", "0001_phase1.sql", "0002_phase3.sql"]) {
+for (const file of ["0000_phase0.sql", "0001_phase1.sql", "0002_phase3.sql", "0005_phase7.sql"]) {
   const statements = readFileSync(join(migrationDir, file), "utf8")
     .split("--> statement-breakpoint")
     .map((statement) => statement.trim())
@@ -200,7 +200,7 @@ const storedOrphan = await db.select().from(events).where(eq(events.paywallSessi
 assert.equal(storedOrphan.length, 2);
 
 const filters = await getFilterOptions(db, projectRow, period);
-assert.deepEqual(filters, { app_versions: ["1.0.0", "2.0.0"], paywall_versions: ["A", "B"] });
+assert.deepEqual(filters, { platforms: ["ios"], app_versions: ["1.0.0", "2.0.0"], paywall_versions: ["A", "B"] });
 
 const onlyNewApp = await getOverview(db, projectRow, { period, now, appVersion: "2.0.0", paywallVersion: null });
 assertFunnel(onlyNewApp, { sessions: 1, clicked: 0, purchased: 0, closed: 1 });

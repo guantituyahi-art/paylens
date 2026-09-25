@@ -1,7 +1,7 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { Database } from "@/db/client";
-import { events, projects } from "@/db/schema";
-import { EVENT_NAMES } from "@/lib/ingest-events";
+import { projects } from "@/db/schema";
+import { getIngestionHealth as loadIngestionHealth, projectTimezone } from "@/lib/metrics/context";
 
 export async function getOwnedProject(db: Database, projectId: string, developerId: string) {
   const [project] = await db
@@ -12,42 +12,13 @@ export async function getOwnedProject(db: Database, projectId: string, developer
   return project ?? null;
 }
 
-export async function getIngestionHealth(db: Database, projectId: string) {
-  const [summary] = await db
-    .select({
-      totalEvents: sql<number>`count(*)::int`,
-      lastEventAt: sql<Date | null>`max(${events.receivedAt})`,
-    })
-    .from(events)
-    .where(eq(events.projectId, projectId));
-
-  const names = await db
-    .selectDistinct({ eventName: events.eventName })
-    .from(events)
-    .where(eq(events.projectId, projectId));
-
-  const [orphans] = await db
-    .select({
-      orphanSessions: sql<number>`count(distinct ${events.paywallSessionId})::int`,
-    })
-    .from(events)
-    .where(
-      and(
-        eq(events.projectId, projectId),
-        sql`not exists (
-          select 1 from events viewed
-          where viewed.project_id = ${projectId}
-            and viewed.paywall_session_id = ${events.paywallSessionId}
-            and viewed.event_name = 'paywall_viewed'
-        )`,
-      ),
-    );
-
-  const seen = new Set(names.map((row) => row.eventName));
+export async function getIngestionHealth(db: Database, projectId: string, asOf = new Date()) {
+  const timezone = await projectTimezone(db, projectId);
+  const envelope = await loadIngestionHealth(db, { id: projectId, timezone }, asOf);
   return {
-    totalEvents: Number(summary?.totalEvents ?? 0),
-    lastEventAt: summary?.lastEventAt ? new Date(summary.lastEventAt).toISOString() : null,
-    eventNamesSeen: EVENT_NAMES.filter((name) => seen.has(name)),
-    orphanSessions: Number(orphans?.orphanSessions ?? 0),
+    totalEvents: envelope.result.total_events,
+    lastEventAt: envelope.result.last_event_at,
+    eventNamesSeen: envelope.result.event_names_seen,
+    orphanSessions: envelope.result.orphan_sessions,
   };
 }

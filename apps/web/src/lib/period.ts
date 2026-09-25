@@ -7,6 +7,7 @@ export type DashboardQuery = {
   period: Period;
   appVersion: string | null;
   paywallVersion: string | null;
+  platform: "ios" | "android" | null;
 };
 
 type QueryParams = {
@@ -15,6 +16,7 @@ type QueryParams = {
   to?: string | null;
   app_version?: string | null;
   paywall_version?: string | null;
+  platform?: string | null;
 };
 
 export function formatLocalDate(date: Date, timeZone: string): string {
@@ -139,6 +141,10 @@ export function parseDashboardQuery(
   if (!appVersion.ok) return appVersion;
   const paywallVersion = readVersion(params.paywall_version, 64, "Paywall 版本");
   if (!paywallVersion.ok) return paywallVersion;
+  const platform = (params.platform ?? "").trim();
+  if (platform !== "" && platform !== "ios" && platform !== "android") {
+    return { ok: false, message: "平台只能是 iOS 或 Android。" };
+  }
 
   return {
     ok: true,
@@ -146,6 +152,7 @@ export function parseDashboardQuery(
       period: period.period,
       appVersion: appVersion.value,
       paywallVersion: paywallVersion.value,
+      platform: platform === "" ? null : platform,
     },
   };
 }

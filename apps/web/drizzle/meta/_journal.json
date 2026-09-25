@@ -36,6 +36,13 @@
       "when": 1758526800000,
       "tag": "0004_phase5_retention",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1758530400000,
+      "tag": "0005_phase7",
+      "breakpoints": true
     }
   ]
 }

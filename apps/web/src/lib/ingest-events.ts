@@ -14,9 +14,12 @@ export const EVENT_NAMES = [
   "subscribe_clicked",
   "purchase_success",
   "paywall_closed",
+  "purchase_failed",
 ] as const;
 
-const PRODUCT_EVENTS = new Set(["subscribe_clicked", "purchase_success"]);
+export const FAILURE_KINDS = ["user_cancelled", "payment_error", "unknown"] as const;
+
+const PRODUCT_EVENTS = new Set(["subscribe_clicked", "purchase_success", "purchase_failed"]);
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export type IngestRejection = { index: number; error: string };
@@ -35,6 +38,8 @@ type ParsedEvent = {
   appVersion: string;
   paywallVersion: string | null;
   productId: string | null;
+  failureKind: (typeof FAILURE_KINDS)[number] | null;
+  sdkVersion: string | null;
   occurredAt: Date;
 };
 
@@ -84,6 +89,23 @@ function parseEvent(raw: unknown, receivedAt: Date): { ok: true; event: ParsedEv
     if (!productId || productId.length > 128) return { ok: false, error: "invalid_product_id" };
   }
 
+  let failureKind: ParsedEvent["failureKind"] = null;
+  if (eventName === "purchase_failed") {
+    if (typeof raw.failure_kind !== "string" || !FAILURE_KINDS.includes(raw.failure_kind as ParsedEvent["failureKind"] & string)) {
+      return { ok: false, error: "invalid_failure_kind" };
+    }
+    failureKind = raw.failure_kind as ParsedEvent["failureKind"];
+  } else if (raw.failure_kind !== undefined && raw.failure_kind !== null) {
+    return { ok: false, error: "invalid_failure_kind" };
+  }
+
+  let sdkVersion: string | null = null;
+  if (raw.sdk_version !== undefined && raw.sdk_version !== null) {
+    if (typeof raw.sdk_version !== "string") return { ok: false, error: "invalid_sdk_version" };
+    sdkVersion = raw.sdk_version.trim();
+    if (!sdkVersion || sdkVersion.length > 32) return { ok: false, error: "invalid_sdk_version" };
+  }
+
   if (typeof raw.occurred_at !== "string") return { ok: false, error: "invalid_occurred_at" };
   const occurredAt = new Date(raw.occurred_at);
   if (Number.isNaN(occurredAt.getTime())) return { ok: false, error: "invalid_occurred_at" };
@@ -101,6 +123,8 @@ function parseEvent(raw: unknown, receivedAt: Date): { ok: true; event: ParsedEv
       appVersion,
       paywallVersion,
       productId,
+      failureKind,
+      sdkVersion,
       occurredAt: clamped ? receivedAt : occurredAt,
     },
   };
@@ -173,6 +197,8 @@ export async function ingestEvents(
                   appVersion: event.appVersion,
                   paywallVersion: event.paywallVersion,
                   productId: event.productId,
+                  failureKind: event.failureKind,
+                  sdkVersion: event.sdkVersion,
                   occurredAt: event.occurredAt,
                   receivedAt,
                 })),

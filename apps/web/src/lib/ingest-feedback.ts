@@ -28,6 +28,7 @@ type ParsedFeedback = {
   platform: "ios" | "android";
   appVersion: string;
   paywallVersion: string | null;
+  sdkVersion: string | null;
   occurredAt: Date;
 };
 
@@ -98,6 +99,13 @@ function parseFeedback(raw: unknown, receivedAt: Date): { ok: true; feedback: Pa
     if (!paywallVersion || paywallVersion.length > 64) return { ok: false, error: "invalid_paywall_version" };
   }
 
+  let sdkVersion: string | null = null;
+  if (raw.sdk_version !== undefined && raw.sdk_version !== null) {
+    if (typeof raw.sdk_version !== "string") return { ok: false, error: "invalid_sdk_version" };
+    sdkVersion = raw.sdk_version.trim();
+    if (!sdkVersion || sdkVersion.length > 32) return { ok: false, error: "invalid_sdk_version" };
+  }
+
   if (typeof raw.occurred_at !== "string") return { ok: false, error: "invalid_occurred_at" };
   const occurredAt = new Date(raw.occurred_at);
   if (Number.isNaN(occurredAt.getTime())) return { ok: false, error: "invalid_occurred_at" };
@@ -116,6 +124,7 @@ function parseFeedback(raw: unknown, receivedAt: Date): { ok: true; feedback: Pa
       platform: raw.platform,
       appVersion,
       paywallVersion,
+      sdkVersion,
       occurredAt: future || stale ? receivedAt : occurredAt,
     },
   };
@@ -152,6 +161,7 @@ export async function ingestFeedback(
         platform: row.platform,
         appVersion: row.appVersion,
         paywallVersion: row.paywallVersion,
+        sdkVersion: row.sdkVersion,
         occurredAt: row.occurredAt,
         receivedAt,
       })

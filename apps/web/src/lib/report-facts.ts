@@ -19,13 +19,32 @@ export const THEME_LABELS: Record<string, string> = {
 
 export const PRESET_THEMES = Object.keys(THEME_LABELS);
 
-export type SnapshotFact = { id: string; text: string; source_keys: string[] };
+export type SnapshotEvidence = {
+  evidence_id: string;
+  tool: string;
+  args: {
+    period: { from: string; to: string };
+    compare?: { from: string; to: string };
+    platform: "ios" | "android" | null;
+    app_version: string | null;
+    paywall_version: string | null;
+    as_of: string | null;
+  };
+};
+
+export type SnapshotFact = {
+  id: string;
+  evidence_id: string;
+  class: "measured" | "direct" | "behavioral";
+  text: string;
+  source_keys: string[];
+};
 
 export type ReportSnapshot = {
   timezone: string;
   period: { start: string; end: string; days: number };
   compare: { start: string; end: string };
-  filters: { app_version: string | null; paywall_version: string | null };
+  filters: { app_version: string | null; paywall_version: string | null; platform?: "ios" | "android" | null };
   thresholds: { min_sessions: number; min_feedback: number; min_reason_count: number; met: boolean };
   funnel: {
     current: FunnelCounts;
@@ -49,6 +68,7 @@ export type ReportSnapshot = {
   };
   comment_themes: Array<{ theme: string; count: number; examples: string[] }>;
   by_product: Array<{ product_id: string; clicked: number; purchased: number }>;
+  evidence?: SnapshotEvidence[];
   facts: SnapshotFact[];
   key_changes: string[];
   caveats: string[];
@@ -58,6 +78,7 @@ type FunnelCounts = {
   sessions: number;
   clicked: number;
   purchased: number;
+  payment_error: number;
   view_to_click: number | null;
   click_to_purchase: number | null;
   overall: number | null;
@@ -97,9 +118,17 @@ function themeLabel(theme: string) {
 export function buildFacts(snapshot: Omit<ReportSnapshot, "facts" | "key_changes" | "caveats">) {
   const facts: SnapshotFact[] = [];
   const keyChanges: string[] = [];
-  const add = (text: string, sourceKeys: string[], keyChange = false) => {
+  const evidenceIdFor = (tool: string) =>
+    snapshot.evidence?.find((item) => item.tool === tool)?.evidence_id ?? "ev_unscoped";
+  const add = (
+    text: string,
+    sourceKeys: string[],
+    factClass: SnapshotFact["class"] = "measured",
+    keyChange = false,
+    tool = "get_paywall_funnel",
+  ) => {
     const id = `F${facts.length + 1}`;
-    facts.push({ id, text, source_keys: sourceKeys });
+    facts.push({ id, evidence_id: evidenceIdFor(tool), class: factClass, text, source_keys: sourceKeys });
     if (keyChange) keyChanges.push(id);
   };
 
@@ -107,6 +136,7 @@ export function buildFacts(snapshot: Omit<ReportSnapshot, "facts" | "key_changes
   add(
     `整体转化率 ${percent(snapshot.funnel.current.overall)}，上期 ${percent(snapshot.funnel.previous.overall)}，${changePhrase(overallDelta)}`,
     ["funnel.current.overall", "funnel.previous.overall"],
+    "measured",
     overallDelta !== null && overallDelta !== 0,
   );
 
@@ -127,13 +157,14 @@ export function buildFacts(snapshot: Omit<ReportSnapshot, "facts" | "key_changes
     add(
       `${label} ${percent(snapshot.funnel.current[key])}，上期 ${percent(snapshot.funnel.previous[key])}，${changePhrase(delta)}`,
       [`funnel.current.${key}`, `funnel.previous.${key}`],
+      "measured",
       delta !== null && delta !== 0,
     );
   }
 
   const top = snapshot.feedback.reasons[0];
   if (top) {
-    add(`“${top.label}”占 ${percent(top.share)}（n=${top.count}）`, [`feedback.reasons[${top.code}]`]);
+    add(`“${top.label}”占 ${percent(top.share)}（n=${top.count}）`, [`feedback.reasons[${top.code}]`], "direct", false, "get_feedback_reasons");
   } else {
     add("这个周期没有反馈", ["feedback.total"]);
   }
@@ -146,13 +177,21 @@ export function buildFacts(snapshot: Omit<ReportSnapshot, "facts" | "key_changes
     add(
       `“${reason.label}”占 ${percent(reason.share)}（n=${reason.count}），上期 ${percent(reason.prev_share)}，${direction} ${Math.abs(reason.delta_pp ?? 0)} 个百分点`,
       [`feedback.reasons[${reason.code}]`],
+      "direct",
       true,
+      "get_feedback_reasons",
     );
   }
 
   for (const theme of [...snapshot.comment_themes].sort((a, b) => b.count - a.count || a.theme.localeCompare(b.theme))) {
     if (theme.count < MIN_THEME_COUNT) continue;
-    add(`${theme.count} 条文字反馈归为主题「${themeLabel(theme.theme)}」`, [`comment_themes[${theme.theme}]`]);
+    add(
+      `${theme.count} 条文字反馈归为主题「${themeLabel(theme.theme)}」`,
+      [`comment_themes[${theme.theme}]`],
+      "direct",
+      false,
+      "get_feedback_themes",
+    );
   }
 
   const products = snapshot.by_product.filter((product) => product.clicked >= MIN_PRODUCT_CLICKS);
@@ -160,7 +199,7 @@ export function buildFacts(snapshot: Omit<ReportSnapshot, "facts" | "key_changes
     const text = products
       .map((product) => `${product.product_id} 点击 ${product.clicked} 次、购买 ${product.purchased} 次`)
       .join("；");
-    add(`分产品：${text}`, ["by_product"]);
+    add(`分产品：${text}`, ["by_product"], "measured", false, "product_counts");
   }
 
   const response =

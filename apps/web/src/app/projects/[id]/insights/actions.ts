@@ -14,6 +14,7 @@ export async function generateReportAction(formData: FormData) {
     period: formData.get("period"),
     appVersion: formData.get("app_version"),
     paywallVersion: formData.get("paywall_version"),
+    platform: formData.get("platform"),
   });
   const back = `/projects/${projectId}/insights`;
   if (!parsed.ok) redirect(`${back}?error=${encodeURIComponent(parsed.message)}`);
@@ -30,10 +31,12 @@ export async function generateReportAction(formData: FormData) {
     periodKind: parsed.periodKind,
     appVersion: parsed.appVersion,
     paywallVersion: parsed.paywallVersion,
+    platform: parsed.platform,
     now: new Date(),
     provider: createAiProviderFromEnv(),
   });
   const params = new URLSearchParams({ period: parsed.periodKind, report: report.id });
+  if (parsed.platform) params.set("platform", parsed.platform);
   if (parsed.appVersion) params.set("app_version", parsed.appVersion);
   if (parsed.paywallVersion) params.set("paywall_version", parsed.paywallVersion);
   redirect(`${back}?${params.toString()}`);

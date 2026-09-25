@@ -5,6 +5,7 @@ import { getDatabaseUrl, getDb } from "@/db/client";
 import { requireUser } from "@/lib/auth";
 import { getFilterOptions } from "@/lib/funnel";
 import { getOwnedProject } from "@/lib/ingestion-health";
+import { dashboardHref } from "@/lib/dashboard-href";
 import { completeReportPeriod } from "@/lib/period";
 import { ensureDeveloperRecord } from "@/lib/projects";
 import { getReport, listReports, type StoredReport } from "@/lib/reports";
@@ -21,20 +22,19 @@ const STATUS_LABEL: Record<StoredReport["status"], string> = {
 
 const CONFIDENCE_LABEL = { low: "低", medium: "中", high: "高" };
 
-function pageHref(projectId: string, period: "7d" | "30d", appVersion: string, paywallVersion: string, reportId?: string) {
-  const params = new URLSearchParams({ period });
-  if (appVersion) params.set("app_version", appVersion);
-  if (paywallVersion) params.set("paywall_version", paywallVersion);
-  if (reportId) params.set("report", reportId);
-  return `/projects/${projectId}/insights?${params.toString()}`;
-}
-
 export default async function InsightsPage({
   params,
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ period?: string; app_version?: string; paywall_version?: string; report?: string; error?: string }>;
+  searchParams: Promise<{
+    period?: string;
+    app_version?: string;
+    paywall_version?: string;
+    platform?: string;
+    report?: string;
+    error?: string;
+  }>;
 }) {
   const { id } = await params;
   const query = await searchParams;
@@ -56,6 +56,7 @@ export default async function InsightsPage({
   const period = query.period === "30d" ? "30d" : "7d";
   const appVersion = query.app_version?.trim() ?? "";
   const paywallVersion = query.paywall_version?.trim() ?? "";
+  const platform = query.platform === "ios" || query.platform === "android" ? query.platform : "";
   const now = new Date();
   const range = completeReportPeriod(project.timezone, period, now);
   const [reports, filters] = await Promise.all([
@@ -69,9 +70,29 @@ export default async function InsightsPage({
       <p>
         <Link href="/projects">项目</Link>
         {" · "}
-        <Link href={`/projects/${project.id}/overview`}>概览</Link>
+        <Link
+          href={dashboardHref(project.id, "overview", {
+            from: range.from,
+            to: range.to,
+            platform,
+            appVersion,
+            paywallVersion,
+          })}
+        >
+          概览
+        </Link>
         {" · "}
-        <Link href={`/projects/${project.id}/feedback`}>反馈</Link>
+        <Link
+          href={dashboardHref(project.id, "feedback", {
+            from: range.from,
+            to: range.to,
+            platform,
+            appVersion,
+            paywallVersion,
+          })}
+        >
+          反馈
+        </Link>
         {" · "}
         <Link href={`/projects/${project.id}/settings`}>设置</Link>
         {" · "}
@@ -79,13 +100,13 @@ export default async function InsightsPage({
       </p>
       <h1>{project.name} 的报告</h1>
       <p className="muted">
-        数字和事实句由代码计算。AI 只做文字主题归类，以及基于这些事实的假设和建议。报告不含今天，近 7 天是昨天往前共 7 个完整自然日。
+        数字和事实句由代码计算。AI 只做文字主题归类，以及基于这些事实的假设和建议。报告只用已经结束的完整自然日，不含今天。从概览或反馈进来时会保留平台、App 版本和 Paywall 版本，但不会沿用那边含今天的日期。近 7 天是昨天往前共 7 天。
       </p>
       <p className="links">
-        <Link className={period === "7d" ? "current" : undefined} href={pageHref(project.id, "7d", appVersion, paywallVersion)}>
+        <Link className={period === "7d" ? "current" : undefined} href={dashboardHref(project.id, "insights", { period: "7d", appVersion, paywallVersion, platform })}>
           近 7 天
         </Link>
-        <Link className={period === "30d" ? "current" : undefined} href={pageHref(project.id, "30d", appVersion, paywallVersion)}>
+        <Link className={period === "30d" ? "current" : undefined} href={dashboardHref(project.id, "insights", { period: "30d", appVersion, paywallVersion, platform })}>
           近 30 天
         </Link>
       </p>
@@ -98,6 +119,7 @@ export default async function InsightsPage({
         period={period}
         appVersion={appVersion}
         paywallVersion={paywallVersion}
+        platform={platform}
         appVersions={filters.app_versions}
         paywallVersions={filters.paywall_versions}
       />
@@ -109,7 +131,7 @@ export default async function InsightsPage({
           <Link
             key={report.id}
             className={selected?.id === report.id ? "current" : undefined}
-            href={pageHref(project.id, period, appVersion, paywallVersion, report.id)}
+            href={dashboardHref(project.id, "insights", { period, appVersion, paywallVersion, platform, report: report.id })}
           >
             {report.periodStart} 至 {report.periodEnd} · {STATUS_LABEL[report.status]}
           </Link>

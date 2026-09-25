@@ -71,11 +71,20 @@ export const events = pgTable(
     appVersion: text("app_version").notNull(),
     paywallVersion: text("paywall_version"),
     productId: text("product_id"),
+    failureKind: text("failure_kind"),
+    sdkVersion: text("sdk_version"),
     occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
     receivedAt: timestamp("received_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
     uniqueIndex("events_project_event_unique").on(table.projectId, table.eventId),
+    check(
+      "events_failure_kind_check",
+      sql`(
+        (${table.eventName} = 'purchase_failed' AND ${table.failureKind} IN ('user_cancelled', 'payment_error', 'unknown'))
+        OR (${table.eventName} <> 'purchase_failed' AND ${table.failureKind} IS NULL)
+      )`,
+    ),
     index("events_project_occurred_idx").on(table.projectId, table.occurredAt),
     index("events_project_name_occurred_idx").on(table.projectId, table.eventName, table.occurredAt),
     index("events_project_session_idx").on(table.projectId, table.paywallSessionId),
@@ -99,6 +108,9 @@ export const feedback = pgTable(
     platform: text("platform").notNull(),
     appVersion: text("app_version").notNull(),
     paywallVersion: text("paywall_version"),
+    sdkVersion: text("sdk_version"),
+    theme: text("theme"),
+    themeVersion: text("theme_version"),
     occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
     receivedAt: timestamp("received_at", { withTimezone: true }).notNull().defaultNow(),
   },

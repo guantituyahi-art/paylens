@@ -1,7 +1,7 @@
 import { and, desc, eq, gte, inArray } from "drizzle-orm";
 import type { Database } from "@/db/client";
 import type { AiProvider, JsonSchema } from "@/lib/ai-provider";
-import { aiReports } from "@/db/schema";
+import { aiReports, feedback } from "@/db/schema";
 import { completeReportPeriod, type Period } from "@/lib/period";
 import {
   buildFacts,
@@ -81,7 +81,7 @@ export type StoredReport = {
   periodEnd: string;
   compareStart: string;
   compareEnd: string;
-  filters: { app_version: string | null; paywall_version: string | null };
+  filters: { app_version: string | null; paywall_version: string | null; platform?: "ios" | "android" | null };
   model: string | null;
   promptVersion: string | null;
   inputSnapshot: ReportSnapshot | null;
@@ -109,10 +109,11 @@ function dateKey(value: unknown) {
 function asFilters(value: unknown): StoredReport["filters"] {
   const record = typeof value === "string" ? (JSON.parse(value) as unknown) : value;
   if (!record || typeof record !== "object") return { app_version: null, paywall_version: null };
-  const filters = record as { app_version?: unknown; paywall_version?: unknown };
+  const filters = record as { app_version?: unknown; paywall_version?: unknown; platform?: unknown };
   return {
     app_version: typeof filters.app_version === "string" ? filters.app_version : null,
     paywall_version: typeof filters.paywall_version === "string" ? filters.paywall_version : null,
+    platform: filters.platform === "ios" || filters.platform === "android" ? filters.platform : null,
   };
 }
 
@@ -146,7 +147,11 @@ function toStored(row: typeof aiReports.$inferSelect): StoredReport {
 }
 
 function sameFilters(actual: StoredReport["filters"], expected: StoredReport["filters"]) {
-  return actual.app_version === expected.app_version && actual.paywall_version === expected.paywall_version;
+  return (
+    actual.app_version === expected.app_version &&
+    actual.paywall_version === expected.paywall_version &&
+    (actual.platform ?? null) === (expected.platform ?? null)
+  );
 }
 
 function groupThemes(comments: ThemeComment[], assignments: Map<string, string>) {
@@ -231,12 +236,17 @@ export async function generateReport(
     periodKind: "7d" | "30d";
     appVersion: string | null;
     paywallVersion: string | null;
+    platform?: "ios" | "android" | null;
     now: Date;
     provider: AiProvider | null;
   },
 ) {
   const period = completeReportPeriod(project.timezone, input.periodKind, input.now);
-  const filters = { app_version: input.appVersion, paywall_version: input.paywallVersion };
+  const filters = {
+    app_version: input.appVersion,
+    paywall_version: input.paywallVersion,
+    platform: input.platform ?? null,
+  };
   const cutoff = new Date(Date.now() - RECENT_REPORT_MS);
   const recent = await db
     .select()
@@ -254,11 +264,14 @@ export async function generateReport(
   const existing = recent.map(toStored).find((report) => sameFilters(report.filters, filters));
   if (existing) return existing;
 
+  const asOf = input.now;
   const measured = await buildMeasuredSnapshot(db, project, {
     period,
-    now: input.now,
+    now: asOf,
+    asOf,
     appVersion: input.appVersion,
     paywallVersion: input.paywallVersion,
+    platform: input.platform ?? null,
   });
   const { comments, ...base } = measured;
   if (!base.thresholds.met) {
@@ -285,18 +298,36 @@ export async function generateReport(
             : "还没有配置 AI。请在服务端设置 AI_PROVIDER、AI_API_KEY 和 AI_MODEL。",
       });
     }
-    const assignments =
-      comments.length === 0
-        ? new Map<string, string>()
-        : readAssignments(
-            await input.provider.generateStructured({
-              name: "theme_assignments",
-              schema: themeSchema,
-              system:
-                "你只把评论归入主题。预置主题：paywall_too_early、core_feature_not_experienced、price_too_high_annual、price_too_high_monthly、want_trial、unclear_value、payment_error、already_has_alternative、other。无法归入时可以输出新的 snake_case 主题。不要写解释。",
-              user: JSON.stringify({ comments }),
-            }),
-          );
+    const pending = comments.filter((comment) => !comment.theme);
+    const assignments = new Map<string, string>();
+    for (const comment of comments) {
+      if (comment.theme) assignments.set(comment.id, comment.theme);
+    }
+    if (pending.length > 0) {
+      const fresh = readAssignments(
+        await input.provider.generateStructured({
+          name: "theme_assignments",
+          schema: themeSchema,
+          system:
+            "你只把评论归入主题。预置主题：paywall_too_early、core_feature_not_experienced、price_too_high_annual、price_too_high_monthly、want_trial、unclear_value、payment_error、already_has_alternative、other。无法归入时可以输出新的 snake_case 主题。不要写解释。",
+          user: JSON.stringify({ comments: pending.map((comment) => ({ id: comment.id, text: comment.text })) }),
+        }),
+      );
+      for (const [id, theme] of fresh) assignments.set(id, theme);
+      try {
+        for (const [id, theme] of fresh) {
+          const rowId = Number(id);
+          if (!Number.isInteger(rowId)) continue;
+          await db
+            .update(feedback)
+            .set({ theme, themeVersion: PROMPT_VERSION })
+            .where(and(eq(feedback.projectId, project.id), eq(feedback.id, rowId)));
+        }
+      } catch (error) {
+        console.error("theme writeback failed");
+        console.error(error instanceof Error ? error.name : "unknown");
+      }
+    }
     const commentThemes = groupThemes(comments, assignments);
     const facts = buildFacts({ ...base, comment_themes: commentThemes });
     const snapshot: ReportSnapshot = { ...base, comment_themes: commentThemes, ...facts };
@@ -357,8 +388,15 @@ export function readReportRequest(input: {
   period: unknown;
   appVersion: unknown;
   paywallVersion: unknown;
+  platform?: unknown;
 }):
-  | { ok: true; periodKind: "7d" | "30d"; appVersion: string | null; paywallVersion: string | null }
+  | {
+      ok: true;
+      periodKind: "7d" | "30d";
+      appVersion: string | null;
+      paywallVersion: string | null;
+      platform: "ios" | "android" | null;
+    }
   | { ok: false; message: string } {
   if (input.period !== "7d" && input.period !== "30d") {
     return { ok: false, message: "周期只能是近 7 天或近 30 天。" };
@@ -367,11 +405,17 @@ export function readReportRequest(input: {
   if (!appVersion.ok) return appVersion;
   const paywallVersion = readOptionalText(input.paywallVersion, 64, "Paywall 版本");
   if (!paywallVersion.ok) return paywallVersion;
+  const platformText = readOptionalText(input.platform, 16, "平台");
+  if (!platformText.ok) return platformText;
+  if (platformText.value && platformText.value !== "ios" && platformText.value !== "android") {
+    return { ok: false, message: "平台只能是 iOS 或 Android。" };
+  }
   return {
     ok: true,
     periodKind: input.period,
     appVersion: appVersion.value,
     paywallVersion: paywallVersion.value,
+    platform: platformText.value === "ios" || platformText.value === "android" ? platformText.value : null,
   };
 }
 

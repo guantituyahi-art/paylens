@@ -1,6 +1,8 @@
 import { sql } from "drizzle-orm";
 import type { Database } from "@/db/client";
-import { previousPeriod, type Period } from "@/lib/period";
+import { anchorCte, type MetricScope, type Platform } from "@/lib/metrics/anchor";
+import { getFeedbackReasons, loadReasonCounts } from "@/lib/metrics/feedback";
+import type { Period } from "@/lib/period";
 import { MIN_REASON_COUNT } from "@/lib/thresholds";
 
 export { MIN_REASON_COUNT };
@@ -39,6 +41,8 @@ type VersionFilter = {
   period: Period;
   appVersion: string | null;
   paywallVersion: string | null;
+  platform?: Platform | null;
+  asOf?: Date | null;
 };
 
 function queryRows(result: unknown): Record<string, unknown>[] {
@@ -57,56 +61,27 @@ function textCell(value: unknown) {
   return String(value);
 }
 
-function versionSql(appVersion: string | null, paywallVersion: string | null) {
+function versionSql(input: VersionFilter) {
   return sql`
-    ${appVersion ? sql`AND app_version = ${appVersion}` : sql``}
-    ${paywallVersion ? sql`AND paywall_version = ${paywallVersion}` : sql``}
+    ${input.platform ? sql`AND platform = ${input.platform}` : sql``}
+    ${input.appVersion ? sql`AND app_version = ${input.appVersion}` : sql``}
+    ${input.paywallVersion ? sql`AND paywall_version = ${input.paywallVersion}` : sql``}
+    ${input.asOf ? sql`AND received_at <= ${input.asOf.toISOString()}::timestamptz` : sql``}
   `;
 }
 
-async function reasonCounts(
-  db: Database,
-  project: { id: string; timezone: string },
-  input: VersionFilter,
-) {
-  const result = await db.execute(sql`
-    WITH viewed AS (
-      SELECT DISTINCT ON (paywall_session_id)
-        paywall_session_id,
-        occurred_at AS viewed_at,
-        app_version,
-        paywall_version
-      FROM events
-      WHERE project_id = ${project.id}
-        AND event_name = 'paywall_viewed'
-      ORDER BY paywall_session_id, occurred_at ASC, id ASC
-    ),
-    anchored AS (
-      SELECT paywall_session_id
-      FROM viewed
-      WHERE to_char(viewed_at AT TIME ZONE ${project.timezone}, 'YYYY-MM-DD') >= ${input.period.from}
-        AND to_char(viewed_at AT TIME ZONE ${project.timezone}, 'YYYY-MM-DD') <= ${input.period.to}
-        ${versionSql(input.appVersion, input.paywallVersion)}
-    )
-    SELECT
-      feedback.reason_code AS code,
-      count(*)::int AS count,
-      (
-        array_agg(feedback.reason_label ORDER BY feedback.occurred_at DESC)
-        FILTER (WHERE feedback.reason_label IS NOT NULL)
-      )[1] AS label
-    FROM feedback
-    JOIN anchored ON anchored.paywall_session_id = feedback.paywall_session_id
-    WHERE feedback.project_id = ${project.id}
-    GROUP BY feedback.reason_code
-  `);
-  const counts = new Map<string, { count: number; label: string }>();
-  for (const row of queryRows(result)) {
-    const code = textCell(row.code);
-    if (!code) continue;
-    counts.set(code, { count: Number(row.count ?? 0), label: textCell(row.label) });
-  }
-  return counts;
+function scopeOf(input: VersionFilter) {
+  return {
+    period: input.period,
+    platform: input.platform ?? null,
+    appVersion: input.appVersion,
+    paywallVersion: input.paywallVersion,
+    asOf: input.asOf ?? null,
+  };
+}
+
+function reasonScope(input: VersionFilter): MetricScope {
+  return scopeOf(input);
 }
 
 /** 只统计挂在本期 Paywall session 上的反馈。没有 paywall_viewed 的不计入回答率。 */
@@ -115,7 +90,7 @@ export async function countSessionFeedback(
   project: { id: string; timezone: string },
   input: VersionFilter,
 ) {
-  const counts = await reasonCounts(db, project, input);
+  const counts = await loadReasonCounts(db, project, reasonScope(input));
   let total = 0;
   for (const row of counts.values()) total += row.count;
   return total;
@@ -126,35 +101,13 @@ export async function getFeedbackSummary(
   project: { id: string; timezone: string },
   input: VersionFilter,
 ): Promise<FeedbackSummary> {
-  const compare = previousPeriod(input.period);
-  const [current, previous] = await Promise.all([
-    reasonCounts(db, project, input),
-    reasonCounts(db, project, { ...input, period: compare }),
-  ]);
-  let total = 0;
-  let previousTotal = 0;
-  for (const row of current.values()) total += row.count;
-  for (const row of previous.values()) previousTotal += row.count;
-
-  const reasons = [...current.entries()]
-    .map(([code, row]) => {
-      const prevCount = previous.get(code)?.count ?? 0;
-      const share = total === 0 ? 0 : row.count / total;
-      const prevShare = previousTotal === 0 ? null : prevCount / previousTotal;
-      return {
-        code,
-        label: row.label || code,
-        count: row.count,
-        share,
-        prev_count: prevCount,
-        prev_share: prevShare,
-        delta_pp: prevShare === null ? null : Math.round((share - prevShare) * 100),
-        low_sample: row.count < MIN_REASON_COUNT || prevCount < MIN_REASON_COUNT,
-      };
-    })
-    .sort((a, b) => b.count - a.count || a.code.localeCompare(b.code));
-
-  return { total, previous_total: previousTotal, compare, reasons };
+  const envelope = await getFeedbackReasons(db, project, reasonScope(input), input.asOf ?? new Date());
+  return {
+    total: envelope.result.total,
+    previous_total: envelope.result.previous_total,
+    compare: envelope.result.compare,
+    reasons: envelope.result.reasons,
+  };
 }
 
 function encodeCursor(occurredAt: string, id: number) {
@@ -200,9 +153,9 @@ export async function getFeedbackComments(
       ) AS orphan
     FROM feedback
     WHERE project_id = ${project.id}
-      AND to_char(occurred_at AT TIME ZONE ${project.timezone}, 'YYYY-MM-DD') >= ${input.period.from}
-      AND to_char(occurred_at AT TIME ZONE ${project.timezone}, 'YYYY-MM-DD') <= ${input.period.to}
-      ${versionSql(input.appVersion, input.paywallVersion)}
+      AND occurred_at >= ((${input.period.from} || ' 00:00:00')::timestamp AT TIME ZONE ${project.timezone})
+      AND occurred_at < (((${input.period.to} || ' 00:00:00')::timestamp + interval '1 day') AT TIME ZONE ${project.timezone})
+      ${versionSql(input)}
       ${input.textOnly ? sql`AND comment IS NOT NULL AND comment <> ''` : sql``}
       ${
         decoded

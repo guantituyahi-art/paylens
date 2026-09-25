@@ -6,6 +6,9 @@ import { requireUser } from "@/lib/auth";
 import { DROP_LABELS, getFilterOptions, getOverview, type Overview } from "@/lib/funnel";
 import { EVENT_NAMES } from "@/lib/ingest-events";
 import { getOwnedProject } from "@/lib/ingestion-health";
+import { breakdownMetric, type BreakdownDimension, type BreakdownGroup } from "@/lib/metrics/paywall";
+import { SIGNAL_LABEL } from "@/lib/metrics/sample";
+import { dashboardHref } from "@/lib/dashboard-href";
 import { parseDashboardQuery, resolvePeriod } from "@/lib/period";
 import { ensureDeveloperRecord, listProjectsForDeveloper } from "@/lib/projects";
 
@@ -30,11 +33,47 @@ function formatAge(iso: string, now: Date) {
   return `${Math.round(hours / 24)} 天前`;
 }
 
-function rangeHref(projectId: string, range: "7d" | "30d", appVersion: string, paywallVersion: string) {
+function rangeHref(
+  projectId: string,
+  range: "7d" | "30d",
+  appVersion: string,
+  paywallVersion: string,
+  platform: string,
+  segment = "platform",
+) {
   const params = new URLSearchParams({ range });
+  if (platform) params.set("platform", platform);
   if (appVersion) params.set("app_version", appVersion);
   if (paywallVersion) params.set("paywall_version", paywallVersion);
+  if (segment) params.set("segment", segment);
   return `/projects/${projectId}/overview?${params.toString()}`;
+}
+
+function filterHref(
+  projectId: string,
+  input: { from: string; to: string; platform: string; appVersion: string; paywallVersion: string; segment: string },
+) {
+  const params = new URLSearchParams({ from: input.from, to: input.to, segment: input.segment });
+  if (input.platform) params.set("platform", input.platform);
+  if (input.appVersion) params.set("app_version", input.appVersion);
+  if (input.paywallVersion) params.set("paywall_version", input.paywallVersion);
+  return `/projects/${projectId}/overview?${params.toString()}`;
+}
+
+function formatPoints(value: number | null) {
+  if (value === null) return "—";
+  const points = value * 100;
+  const sign = points > 0 ? "+" : "";
+  return `${sign}${points.toFixed(1)} 个百分点`;
+}
+
+function formatRate(group: BreakdownGroup["current"]) {
+  if (group.status === "hidden" || group.status === "insufficient" || group.rate === null) return "样本不足";
+  const percent = `${(group.rate * 100).toFixed(1)}%`;
+  if (group.status === "small_sample" && group.interval) {
+    return `${percent}（${(group.interval.low * 100).toFixed(1)}%–${(group.interval.high * 100).toFixed(1)}%，小样本）`;
+  }
+  return percent;
 }
 
 function FilterForm({
@@ -43,6 +82,8 @@ function FilterForm({
   to,
   appVersion,
   paywallVersion,
+  platform,
+  segment,
   appVersions,
   paywallVersions,
 }: {
@@ -51,6 +92,8 @@ function FilterForm({
   to: string;
   appVersion: string;
   paywallVersion: string;
+  platform: string;
+  segment: BreakdownDimension;
   appVersions: string[];
   paywallVersions: string[];
 }) {
@@ -67,6 +110,22 @@ function FilterForm({
       <label>
         结束
         <input type="date" name="to" defaultValue={to} required />
+      </label>
+      <label>
+        平台
+        <select name="platform" defaultValue={platform}>
+          <option value="">全部</option>
+          <option value="ios">iOS</option>
+          <option value="android">Android</option>
+        </select>
+      </label>
+      <label>
+        分群
+        <select name="segment" defaultValue={segment}>
+          <option value="platform">平台</option>
+          <option value="app_version">App 版本</option>
+          <option value="paywall_version">Paywall 版本</option>
+        </select>
       </label>
       <label>
         App 版本
@@ -142,6 +201,8 @@ export default async function OverviewPage({
     to?: string;
     app_version?: string;
     paywall_version?: string;
+    platform?: string;
+    segment?: string;
   }>;
 }) {
   const { id } = await params;
@@ -163,6 +224,14 @@ export default async function OverviewPage({
 
   const now = new Date();
   const parsed = parseDashboardQuery(project.timezone, query, now);
+  const kept = {
+    platform: parsed.ok ? (parsed.query.platform ?? "") : (query.platform ?? ""),
+    appVersion: parsed.ok ? (parsed.query.appVersion ?? "") : (query.app_version ?? ""),
+    paywallVersion: parsed.ok ? (parsed.query.paywallVersion ?? "") : (query.paywall_version ?? ""),
+    from: parsed.ok ? parsed.query.period.from : (query.from ?? ""),
+    to: parsed.ok ? parsed.query.period.to : (query.to ?? ""),
+    segment: query.segment === "app_version" || query.segment === "paywall_version" ? query.segment : "platform",
+  };
   const projects = await listProjectsForDeveloper(db, developer.id);
   const fallback = resolvePeriod({ timezone: project.timezone, now, range: "7d" });
   const fallbackPeriod = fallback.ok ? fallback.period : { from: "", to: "" };
@@ -172,9 +241,27 @@ export default async function OverviewPage({
       <p>
         <Link href="/projects">项目</Link>
         {" · "}
-        <Link href={`/projects/${project.id}/feedback`}>反馈</Link>
+        <Link
+          href={dashboardHref(project.id, "feedback", {
+            from: kept.from,
+            to: kept.to,
+            platform: kept.platform,
+            appVersion: kept.appVersion,
+            paywallVersion: kept.paywallVersion,
+          })}
+        >
+          反馈
+        </Link>
         {" · "}
-        <Link href={`/projects/${project.id}/insights`}>报告</Link>
+        <Link
+          href={dashboardHref(project.id, "insights", {
+            platform: kept.platform,
+            appVersion: kept.appVersion,
+            paywallVersion: kept.paywallVersion,
+          })}
+        >
+          报告
+        </Link>
         {" · "}
         <Link href={`/projects/${project.id}/settings`}>设置</Link>
         {" · "}
@@ -203,6 +290,8 @@ export default async function OverviewPage({
             to={query.to || fallbackPeriod.to}
             appVersion={query.app_version ?? ""}
             paywallVersion={query.paywall_version ?? ""}
+            platform={query.platform ?? ""}
+            segment={query.segment === "app_version" || query.segment === "paywall_version" ? query.segment : "platform"}
             appVersions={[]}
             paywallVersions={[]}
           />
@@ -222,14 +311,34 @@ async function OverviewBody({
   projectId: string;
   timezone: string;
   now: Date;
-  query: { app_version?: string; paywall_version?: string };
-  parsed: { period: { from: string; to: string }; appVersion: string | null; paywallVersion: string | null };
+  query: { app_version?: string; paywall_version?: string; platform?: string; segment?: string };
+  parsed: {
+    period: { from: string; to: string };
+    appVersion: string | null;
+    paywallVersion: string | null;
+    platform: "ios" | "android" | null;
+  };
 }) {
   const db = getDb();
   const project = { id: projectId, timezone };
-  const [overview, filters] = await Promise.all([
-    getOverview(db, project, { ...parsed, now }),
+  const segment: BreakdownDimension =
+    query.segment === "app_version" || query.segment === "paywall_version" ? query.segment : "platform";
+  const [overview, filters, breakdown] = await Promise.all([
+    getOverview(db, project, { ...parsed, now, asOf: now }),
     getFilterOptions(db, project, parsed.period),
+    breakdownMetric(db, project, {
+      metric: "paywall.overall_conversion",
+      dimension: segment,
+      scope: {
+        period: parsed.period,
+        platform: parsed.platform,
+        appVersion: parsed.appVersion,
+        paywallVersion: parsed.paywallVersion,
+        asOf: now,
+      },
+      compare: null,
+      asOf: now,
+    }),
   ]);
   const quick7 = resolvePeriod({ timezone, now, range: "7d" });
   const quick30 = resolvePeriod({ timezone, now, range: "30d" });
@@ -237,6 +346,7 @@ async function OverviewBody({
     period?.from === overview.period.from && period?.to === overview.period.to;
   const appVersion = query.app_version ?? "";
   const paywallVersion = query.paywall_version ?? "";
+  const platform = parsed.platform ?? "";
   const includesToday = overview.daily.some((day) => day.partial);
 
   return (
@@ -244,13 +354,13 @@ async function OverviewBody({
       <p className="links">
         <Link
           className={quick7.ok && sameRange(quick7.period) ? "current" : undefined}
-          href={rangeHref(projectId, "7d", appVersion, paywallVersion)}
+          href={rangeHref(projectId, "7d", appVersion, paywallVersion, platform, segment)}
         >
           最近 7 天
         </Link>
         <Link
           className={quick30.ok && sameRange(quick30.period) ? "current" : undefined}
-          href={rangeHref(projectId, "30d", appVersion, paywallVersion)}
+          href={rangeHref(projectId, "30d", appVersion, paywallVersion, platform, segment)}
         >
           最近 30 天
         </Link>
@@ -261,6 +371,8 @@ async function OverviewBody({
         to={overview.period.to}
         appVersion={parsed.appVersion ?? ""}
         paywallVersion={parsed.paywallVersion ?? ""}
+        platform={platform}
+        segment={segment}
         appVersions={filters.app_versions}
         paywallVersions={filters.paywall_versions}
       />
@@ -282,11 +394,90 @@ async function OverviewBody({
             </p>
           ) : null}
           <p>
+            支付报错 {formatCount(overview.payment_error)}（失败率 {formatPercent(overview.funnel.failure_rate)}）
+            {" · "}
+            用户取消 {formatCount(overview.user_cancelled)}
+          </p>
+          <p className="muted">失败率只算支付报错，用户自己取消不算失败，也不算购买。</p>
+          <p>
             关闭未购买 {formatCount(overview.closed_without_purchase)}
             {" · "}
             收到反馈 {formatCount(overview.feedback_count)}（回答率 {formatPercent(overview.feedback_response_rate)}）
           </p>
           <p className="muted">回答率 = 反馈条数 / 关闭未购买。回答的人不代表所有没付钱的人。</p>
+          {"error" in breakdown ? null : (
+            <>
+              <h2>分群</h2>
+              <p className="muted">少于 5 次的组不显示数字。分母少于 30 不显示比率。30 到 99 会标成小样本。</p>
+              <div className="table-wrap">
+                <table className="daily">
+                  <thead>
+                    <tr>
+                      <th>分组</th>
+                      <th>展示</th>
+                      <th>点击</th>
+                      <th>购买</th>
+                      <th>整体转化</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {breakdown.result.groups.map((group) => (
+                      <tr key={group.key}>
+                        <td>
+                          {group.key === "其他" || group.sessions === null ? (
+                            group.key
+                          ) : (
+                            <Link
+                              href={filterHref(projectId, {
+                                from: overview.period.from,
+                                to: overview.period.to,
+                                platform: segment === "platform" ? group.key : platform,
+                                appVersion: segment === "app_version" ? group.key : appVersion,
+                                paywallVersion: segment === "paywall_version" ? group.key : paywallVersion,
+                                segment,
+                              })}
+                            >
+                              {group.key}
+                            </Link>
+                          )}
+                        </td>
+                        <td>{group.sessions === null ? "—" : formatCount(group.sessions)}</td>
+                        <td>{group.clicked === null ? "—" : formatCount(group.clicked)}</td>
+                        <td>{group.purchased === null ? "—" : formatCount(group.purchased)}</td>
+                        <td>{formatRate(group.current)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <h2>变化来自哪里</h2>
+              <p className="muted">和上一整段同样长的时间比。组内变化是这一组自己变了，占比变化是各组的人变多或变少。</p>
+              <div className="table-wrap">
+                <table className="daily">
+                  <thead>
+                    <tr>
+                      <th>分组</th>
+                      <th>组内变化</th>
+                      <th>占比变化</th>
+                      <th>合计</th>
+                      <th>判断</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {breakdown.result.groups.map((group) => (
+                      <tr key={`change-${group.key}`}>
+                        <td>{group.key}</td>
+                        <td>{formatPoints(group.within)}</td>
+                        <td>{formatPoints(group.mix)}</td>
+                        <td>{formatPoints(group.contribution)}</td>
+                        <td>{SIGNAL_LABEL[group.signal]}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
           <DailyChart daily={overview.daily} />
           <div className="table-wrap">
             <table className="daily">
@@ -328,7 +519,7 @@ async function OverviewBody({
       </p>
       <p className="muted">接入健康看整个项目，不随上面的日期和版本筛选变化。没有先发送 paywall_viewed 的事件只记在这里，不进入漏斗。</p>
       {overview.health.last_event_at && overview.health.event_names_seen.length < EVENT_NAMES.length ? (
-        <p className="drop">还没见过全部 4 种事件。漏发 paywall_closed 时，关闭未购买会偏少。</p>
+        <p className="drop">还没见过全部 {EVENT_NAMES.length} 种事件。漏发 paywall_closed 时，关闭未购买会偏少。</p>
       ) : null}
     </>
   );

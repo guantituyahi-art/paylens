@@ -1,7 +1,7 @@
-import { applyTrack, canShowExitSurvey, type EventName, type SessionState } from "./session";
+import { applyTrack, canShowExitSurvey, FAILURE_KINDS, type EventName, type FailureKind, type SessionState } from "./session";
 import { bindSurveyBridge, PayLensExitSurvey } from "./survey-ui";
 import { clampComment, normalizeSurvey, REASON_CODE_PATTERN, type SurveyConfig } from "./survey";
-import { createEventId, readExpoApplicationVersion, resolveAppVersion } from "./version";
+import { createEventId, readExpoApplicationVersion, resolveAppVersion, SDK_VERSION } from "./version";
 
 export const DEFAULT_ENDPOINT = "http://localhost:3000/v1";
 const MAX_QUEUE = 500;
@@ -39,6 +39,8 @@ type QueuedEvent = {
   app_version: string;
   paywall_version?: string;
   product_id?: string;
+  failure_kind?: FailureKind;
+  sdk_version?: string;
   occurred_at: string;
 };
 
@@ -52,6 +54,7 @@ type QueuedFeedback = {
   platform: string;
   app_version: string;
   paywall_version?: string;
+  sdk_version?: string;
   occurred_at: string;
 };
 
@@ -305,7 +308,7 @@ export function createPayLens(deps: PayLensDeps = {}) {
     await flushFeedback();
   }
 
-  function applyEvent(eventName: EventName, extra?: { productId?: string; paywallVersion?: string }) {
+  function applyEvent(eventName: EventName, extra?: { productId?: string; paywallVersion?: string; failureKind?: FailureKind }) {
     if (!options) return;
     const occurred = now();
     const decision = applyTrack({
@@ -329,9 +332,11 @@ export function createPayLens(deps: PayLensDeps = {}) {
       occurred_at: occurred.toISOString(),
     };
     if (decision.paywallVersion) event.paywall_version = decision.paywallVersion;
-    if (extra?.productId && (eventName === "subscribe_clicked" || eventName === "purchase_success")) {
+    if (extra?.productId && (eventName === "subscribe_clicked" || eventName === "purchase_success" || eventName === "purchase_failed")) {
       event.product_id = extra.productId;
     }
+    if (eventName === "purchase_failed" && extra?.failureKind) event.failure_kind = extra.failureKind;
+    event.sdk_version = SDK_VERSION;
     queue.push(event);
     if (queue.length > MAX_QUEUE) queue.splice(0, queue.length - MAX_QUEUE);
   }
@@ -368,9 +373,13 @@ export function createPayLens(deps: PayLensDeps = {}) {
         stopWatch = watchBackground(() => void flushPending()) ?? (() => undefined);
       }
     },
-    track(eventName: EventName, extra?: { productId?: string; paywallVersion?: string }) {
+    track(eventName: EventName, extra?: { productId?: string; paywallVersion?: string; failureKind?: FailureKind }) {
       if (!options) {
         console.warn("[PayLens] 请先调用 init");
+        return;
+      }
+      if (eventName === "purchase_failed" && !FAILURE_KINDS.includes(extra?.failureKind as FailureKind)) {
+        console.warn("[PayLens] purchase_failed 需要 failureKind：user_cancelled、payment_error 或 unknown");
         return;
       }
       const save = async () => {
@@ -424,6 +433,7 @@ export function createPayLens(deps: PayLensDeps = {}) {
         if (label) item.reason_label = label;
         if (comment) item.comment = comment;
         if (session.paywallVersion) item.paywall_version = session.paywallVersion;
+        item.sdk_version = SDK_VERSION;
         feedbackQueue.push(item);
         await persist();
         if (autoFlush) void flushFeedback();
@@ -468,7 +478,7 @@ export const PayLens = {
   init(options: PayLensOptions) {
     singleton.init(options);
   },
-  track(eventName: EventName, extra?: { productId?: string; paywallVersion?: string }) {
+  track(eventName: EventName, extra?: { productId?: string; paywallVersion?: string; failureKind?: FailureKind }) {
     singleton.track(eventName, extra);
   },
   shouldShowExitSurvey() {

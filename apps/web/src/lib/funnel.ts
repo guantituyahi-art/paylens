@@ -1,11 +1,12 @@
-import { sql } from "drizzle-orm";
 import type { Database } from "@/db/client";
 import { eachDate, formatLocalDate, type Period } from "@/lib/period";
 import { countSessionFeedback } from "@/lib/feedback-stats";
 import { getIngestionHealth } from "@/lib/ingestion-health";
+import type { Platform } from "@/lib/metrics/anchor";
+import { listDimensionValues } from "@/lib/metrics/context";
+import { loadFunnel, PURCHASE_WINDOW_MINUTES } from "@/lib/metrics/paywall";
 
-/** 关闭后仍把 purchase_success 算进同一次 Paywall 的时间窗。 */
-export const PURCHASE_WINDOW_MINUTES = 10;
+export { PURCHASE_WINDOW_MINUTES };
 
 export const DROP_LABELS = {
   view_to_click: "Paywall → 点击订阅",
@@ -24,7 +25,10 @@ export type Overview = {
     view_to_click: number | null;
     click_to_purchase: number | null;
     overall: number | null;
+    failure_rate: number | null;
   };
+  payment_error: number;
+  user_cancelled: number;
   biggest_drop: { step: DropStep; lost: number; lost_rate: number | null } | null;
   closed_without_purchase: number;
   feedback_count: number;
@@ -44,6 +48,7 @@ export type Overview = {
 };
 
 export type FilterOptions = {
+  platforms: string[];
   app_versions: string[];
   paywall_versions: string[];
 };
@@ -53,25 +58,13 @@ type OverviewInput = {
   now: Date;
   appVersion: string | null;
   paywallVersion: string | null;
+  platform?: Platform | null;
+  asOf?: Date | null;
 };
 
 function rate(numerator: number, denominator: number): number | null {
   if (denominator === 0) return null;
   return numerator / denominator;
-}
-
-function queryRows(result: unknown): Record<string, unknown>[] {
-  if (Array.isArray(result)) {
-    return result.filter((row): row is Record<string, unknown> => Boolean(row) && typeof row === "object");
-  }
-  if (result && typeof result === "object" && "rows" in result && Array.isArray(result.rows)) {
-    return result.rows.filter((row): row is Record<string, unknown> => Boolean(row) && typeof row === "object");
-  }
-  return [];
-}
-
-function textCell(value: unknown): string {
-  return typeof value === "string" ? value : String(value ?? "");
 }
 
 /**
@@ -87,82 +80,30 @@ export async function getOverview(
   input: OverviewInput,
 ): Promise<Overview> {
   const { from, to } = input.period;
-  const result = await db.execute(sql`
-    WITH viewed AS (
-      SELECT DISTINCT ON (paywall_session_id)
-        paywall_session_id,
-        occurred_at AS viewed_at,
-        app_version,
-        paywall_version
-      FROM events
-      WHERE project_id = ${project.id}
-        AND event_name = 'paywall_viewed'
-      ORDER BY paywall_session_id, occurred_at ASC, id ASC
-    ),
-    anchored AS (
-      SELECT *
-      FROM viewed
-      WHERE to_char(viewed_at AT TIME ZONE ${project.timezone}, 'YYYY-MM-DD') >= ${from}
-        AND to_char(viewed_at AT TIME ZONE ${project.timezone}, 'YYYY-MM-DD') <= ${to}
-        ${input.appVersion ? sql`AND app_version = ${input.appVersion}` : sql``}
-        ${input.paywallVersion ? sql`AND paywall_version = ${input.paywallVersion}` : sql``}
-    ),
-    agg AS (
-      SELECT
-        anchored.paywall_session_id,
-        anchored.viewed_at,
-        bool_or(e.event_name = 'subscribe_clicked') AS has_click,
-        min(e.occurred_at) FILTER (WHERE e.event_name = 'paywall_closed') AS closed_at
-      FROM anchored
-      JOIN events e
-        ON e.project_id = ${project.id}
-       AND e.paywall_session_id = anchored.paywall_session_id
-      GROUP BY anchored.paywall_session_id, anchored.viewed_at
-    ),
-    classified AS (
-      SELECT
-        to_char(agg.viewed_at AT TIME ZONE ${project.timezone}, 'YYYY-MM-DD') AS day,
-        agg.has_click,
-        agg.closed_at IS NOT NULL AS has_close,
-        EXISTS (
-          SELECT 1
-          FROM events purchase
-          WHERE purchase.project_id = ${project.id}
-            AND purchase.paywall_session_id = agg.paywall_session_id
-            AND purchase.event_name = 'purchase_success'
-            AND purchase.occurred_at <= COALESCE(agg.closed_at, purchase.occurred_at)
-              + (${PURCHASE_WINDOW_MINUTES} * interval '1 minute')
-        ) AS has_purchase
-      FROM agg
-    )
-    SELECT
-      day,
-      count(*)::int AS sessions,
-      count(*) FILTER (WHERE has_click)::int AS clicked,
-      count(*) FILTER (WHERE has_purchase)::int AS purchased,
-      count(*) FILTER (WHERE has_close AND NOT has_purchase)::int AS closed_without_purchase
-    FROM classified
-    GROUP BY day
-    ORDER BY day
-  `);
+  const funnel = await loadFunnel(db, project, {
+    period: input.period,
+    platform: input.platform ?? null,
+    appVersion: input.appVersion,
+    paywallVersion: input.paywallVersion,
+    asOf: input.asOf ?? null,
+  });
 
   const today = formatLocalDate(input.now, project.timezone);
-  const byDay = new Map<string, { sessions: number; clicked: number; purchased: number; closedWithoutPurchase: number }>();
-  for (const row of queryRows(result)) {
-    byDay.set(textCell(row.day), {
-      sessions: Number(row.sessions ?? 0),
-      clicked: Number(row.clicked ?? 0),
-      purchased: Number(row.purchased ?? 0),
-      closedWithoutPurchase: Number(row.closed_without_purchase ?? 0),
-    });
-  }
+  const byDay = new Map(funnel.daily.map((day) => [day.day, day]));
 
   let sessions = 0;
   let clicked = 0;
   let purchased = 0;
   let closedWithoutPurchase = 0;
   const daily = eachDate(from, to).map((date) => {
-    const row = byDay.get(date) ?? { sessions: 0, clicked: 0, purchased: 0, closedWithoutPurchase: 0 };
+    const row = byDay.get(date) ?? {
+      sessions: 0,
+      clicked: 0,
+      purchased: 0,
+      closedWithoutPurchase: 0,
+      paymentError: 0,
+      userCancelled: 0,
+    };
     sessions += row.sessions;
     clicked += row.clicked;
     purchased += row.purchased;
@@ -191,6 +132,8 @@ export async function getOverview(
     period: input.period,
     appVersion: input.appVersion,
     paywallVersion: input.paywallVersion,
+    platform: input.platform ?? null,
+    asOf: input.asOf ?? null,
   });
 
   return {
@@ -203,7 +146,10 @@ export async function getOverview(
       view_to_click: rate(clicked, sessions),
       click_to_purchase: rate(purchased, clicked),
       overall: rate(purchased, sessions),
+      failure_rate: rate(funnel.payment_error, clicked),
     },
+    payment_error: funnel.payment_error,
+    user_cancelled: funnel.user_cancelled,
     biggest_drop: biggestDrop,
     closed_without_purchase: closedWithoutPurchase,
     feedback_count: feedbackCount,
@@ -222,34 +168,18 @@ export async function getFilterOptions(
   project: { id: string; timezone: string },
   period: Period,
 ): Promise<FilterOptions> {
-  const result = await db.execute(sql`
-    WITH viewed AS (
-      SELECT DISTINCT ON (paywall_session_id)
-        occurred_at AS viewed_at,
-        app_version,
-        paywall_version
-      FROM events
-      WHERE project_id = ${project.id}
-        AND event_name = 'paywall_viewed'
-      ORDER BY paywall_session_id, occurred_at ASC, id ASC
-    )
-    SELECT DISTINCT app_version, paywall_version
-    FROM viewed
-    WHERE to_char(viewed_at AT TIME ZONE ${project.timezone}, 'YYYY-MM-DD') >= ${period.from}
-      AND to_char(viewed_at AT TIME ZONE ${project.timezone}, 'YYYY-MM-DD') <= ${period.to}
-  `);
-
-  const appVersions = new Set<string>();
-  const paywallVersions = new Set<string>();
-  for (const row of queryRows(result)) {
-    const appVersion = textCell(row.app_version).trim();
-    const paywallVersion = textCell(row.paywall_version).trim();
-    if (appVersion) appVersions.add(appVersion);
-    if (paywallVersion) paywallVersions.add(paywallVersion);
-  }
-
+  const scope = { period, platform: null, appVersion: null, paywallVersion: null, asOf: null };
+  const asOf = new Date();
+  const [platforms, appVersions, paywallVersions] = await Promise.all([
+    listDimensionValues(db, project, { dimension: "platform", scope, asOf }),
+    listDimensionValues(db, project, { dimension: "app_version", scope, asOf }),
+    listDimensionValues(db, project, { dimension: "paywall_version", scope, asOf }),
+  ]);
+  const names = (value: typeof platforms) =>
+    "error" in value ? [] : value.result.values.map((item) => item.value).sort((a, b) => a.localeCompare(b));
   return {
-    app_versions: [...appVersions].sort((a, b) => a.localeCompare(b)),
-    paywall_versions: [...paywallVersions].sort((a, b) => a.localeCompare(b)),
+    platforms: names(platforms),
+    app_versions: names(appVersions),
+    paywall_versions: names(paywallVersions),
   };
 }

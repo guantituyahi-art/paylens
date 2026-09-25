@@ -146,7 +146,7 @@ assert.equal(emptyInference.ok, true);
 
 const client = new PGlite();
 const migrationDir = join(dirname(fileURLToPath(import.meta.url)), "../drizzle");
-for (const file of ["0000_phase0.sql", "0001_phase1.sql", "0002_phase3.sql", "0003_phase4.sql"]) {
+for (const file of ["0000_phase0.sql", "0001_phase1.sql", "0002_phase3.sql", "0003_phase4.sql", "0005_phase7.sql"]) {
   const statements = readFileSync(join(migrationDir, file), "utf8")
     .split("--> statement-breakpoint")
     .map((statement) => statement.trim())
@@ -182,6 +182,7 @@ async function seedSessions(projectId: string, count: number, feedbackCount: num
       appVersion: "1.0.0",
       paywallVersion: "A",
       occurredAt,
+      receivedAt: occurredAt,
     };
     eventRows.push({ ...base, eventId: randomUUID(), eventName: "paywall_viewed" });
     eventRows.push({ ...base, eventId: randomUUID(), eventName: "paywall_closed" });

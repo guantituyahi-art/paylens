@@ -14,11 +14,11 @@ import { getIngestionHealth } from "../src/lib/ingestion-health";
 
 const client = new PGlite();
 const migrationDir = join(dirname(fileURLToPath(import.meta.url)), "../drizzle");
-for (const file of ["0000_phase0.sql", "0001_phase1.sql"]) {
+for (const file of ["0000_phase0.sql", "0001_phase1.sql", "0005_phase7.sql"]) {
   const statements = readFileSync(join(migrationDir, file), "utf8")
     .split("--> statement-breakpoint")
     .map((statement) => statement.trim())
-    .filter((statement) => statement.length > 0);
+    .filter((statement) => statement.length > 0 && (file !== "0005_phase7.sql" || !/alter table "feedback"/i.test(statement)));
   for (const statement of statements) await client.exec(statement);
 }
 const db = drizzle(client, { schema: { developers, projects, projectKeys, events } }) as unknown as Database;
@@ -87,7 +87,7 @@ assert.equal(orphan.status, 200);
 const health = await getIngestionHealth(db, project!.id);
 assert.equal(health.orphanSessions, 1);
 assert.equal(health.totalEvents, 5);
-assert.deepEqual(health.eventNamesSeen, [...EVENT_NAMES]);
+assert.deepEqual(health.eventNamesSeen, ["paywall_viewed", "subscribe_clicked", "purchase_success", "paywall_closed"]);
 
 const futureEventId = randomUUID();
 const future = await ingestEvents(

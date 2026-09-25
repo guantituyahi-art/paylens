@@ -17,6 +17,7 @@ export function ReportForm({
   period,
   appVersion,
   paywallVersion,
+  platform,
   appVersions,
   paywallVersions,
 }: {
@@ -24,6 +25,7 @@ export function ReportForm({
   period: "7d" | "30d";
   appVersion: string;
   paywallVersion: string;
+  platform: string;
   appVersions: string[];
   paywallVersions: string[];
 }) {
@@ -35,6 +37,14 @@ export function ReportForm({
     <form className="filters" action={generateReportAction}>
       <input type="hidden" name="project_id" value={projectId} />
       <input type="hidden" name="period" value={period} />
+      <label>
+        平台
+        <select name="platform" defaultValue={platform}>
+          <option value="">全部</option>
+          <option value="ios">iOS</option>
+          <option value="android">Android</option>
+        </select>
+      </label>
       <label>
         App 版本
         <select name="app_version" defaultValue={appVersion}>

@@ -5,6 +5,7 @@ import { requireUser } from "@/lib/auth";
 import { getFeedbackComments, getFeedbackSummary, type ReasonStat } from "@/lib/feedback-stats";
 import { getFilterOptions, getOverview } from "@/lib/funnel";
 import { getOwnedProject } from "@/lib/ingestion-health";
+import { dashboardHref } from "@/lib/dashboard-href";
 import { parseDashboardQuery } from "@/lib/period";
 import { ensureDeveloperRecord } from "@/lib/projects";
 
@@ -45,6 +46,7 @@ export default async function FeedbackPage({
     to?: string;
     app_version?: string;
     paywall_version?: string;
+    platform?: string;
     text?: string;
     cursor?: string;
   }>;
@@ -67,6 +69,13 @@ export default async function FeedbackPage({
   if (!project) notFound();
   const now = new Date();
   const parsed = parseDashboardQuery(project.timezone, query, now);
+  const kept = {
+    platform: parsed.ok ? (parsed.query.platform ?? "") : (query.platform ?? ""),
+    appVersion: parsed.ok ? (parsed.query.appVersion ?? "") : (query.app_version ?? ""),
+    paywallVersion: parsed.ok ? (parsed.query.paywallVersion ?? "") : (query.paywall_version ?? ""),
+    from: parsed.ok ? parsed.query.period.from : (query.from ?? ""),
+    to: parsed.ok ? parsed.query.period.to : (query.to ?? ""),
+  };
   const textOnly = query.text !== "all";
 
   return (
@@ -74,9 +83,27 @@ export default async function FeedbackPage({
       <p>
         <Link href="/projects">项目</Link>
         {" · "}
-        <Link href={`/projects/${project.id}/overview`}>概览</Link>
+        <Link
+          href={dashboardHref(project.id, "overview", {
+            from: kept.from,
+            to: kept.to,
+            platform: kept.platform,
+            appVersion: kept.appVersion,
+            paywallVersion: kept.paywallVersion,
+          })}
+        >
+          概览
+        </Link>
         {" · "}
-        <Link href={`/projects/${project.id}/insights`}>报告</Link>
+        <Link
+          href={dashboardHref(project.id, "insights", {
+            platform: kept.platform,
+            appVersion: kept.appVersion,
+            paywallVersion: kept.paywallVersion,
+          })}
+        >
+          报告
+        </Link>
         {" · "}
         <Link href={`/projects/${project.id}/settings`}>设置</Link>
         {" · "}
@@ -102,8 +129,13 @@ async function FeedbackBody({
 }: {
   project: { id: string; timezone: string };
   now: Date;
-  query: { text?: string; cursor?: string; app_version?: string; paywall_version?: string };
-  parsed: { period: { from: string; to: string }; appVersion: string | null; paywallVersion: string | null };
+  query: { text?: string; cursor?: string; app_version?: string; paywall_version?: string; platform?: string };
+  parsed: {
+    period: { from: string; to: string };
+    appVersion: string | null;
+    paywallVersion: string | null;
+    platform: "ios" | "android" | null;
+  };
   textOnly: boolean;
 }) {
   const db = getDb();
@@ -121,6 +153,7 @@ async function FeedbackBody({
   const base = new URLSearchParams();
   base.set("from", parsed.period.from);
   base.set("to", parsed.period.to);
+  if (parsed.platform) base.set("platform", parsed.platform);
   if (parsed.appVersion) base.set("app_version", parsed.appVersion);
   if (parsed.paywallVersion) base.set("paywall_version", parsed.paywallVersion);
   const textParams = new URLSearchParams(base);
@@ -132,8 +165,26 @@ async function FeedbackBody({
   return (
     <>
       <p className="links">
-        <Link href={`/projects/${project.id}/feedback?range=7d`}>最近 7 天</Link>
-        <Link href={`/projects/${project.id}/feedback?range=30d`}>最近 30 天</Link>
+        <Link
+          href={dashboardHref(project.id, "feedback", {
+            range: "7d",
+            platform: parsed.platform ?? "",
+            appVersion: parsed.appVersion ?? "",
+            paywallVersion: parsed.paywallVersion ?? "",
+          })}
+        >
+          最近 7 天
+        </Link>
+        <Link
+          href={dashboardHref(project.id, "feedback", {
+            range: "30d",
+            platform: parsed.platform ?? "",
+            appVersion: parsed.appVersion ?? "",
+            paywallVersion: parsed.paywallVersion ?? "",
+          })}
+        >
+          最近 30 天
+        </Link>
       </p>
       <form className="filters" action={`/projects/${project.id}/feedback`}>
         <label>
@@ -143,6 +194,14 @@ async function FeedbackBody({
         <label>
           结束
           <input type="date" name="to" defaultValue={parsed.period.to} required />
+        </label>
+        <label>
+          平台
+          <select name="platform" defaultValue={parsed.platform ?? ""}>
+            <option value="">全部</option>
+            <option value="ios">iOS</option>
+            <option value="android">Android</option>
+          </select>
         </label>
         <label>
           App 版本
@@ -170,6 +229,8 @@ async function FeedbackBody({
       </form>
       <p className="muted">
         {parsed.period.from} 至 {parsed.period.to} · 对比 {summary.compare.from} 至 {summary.compare.to}
+        {" · "}
+        <Link href={`/projects/${project.id}/overview?${base.toString()}`}>同一筛选的概览</Link>
       </p>
       <p>
         共 {formatCount(summary.total)} 条反馈 · 回答率 {formatPercent(overview.feedback_response_rate)}

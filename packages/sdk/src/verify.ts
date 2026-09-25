@@ -180,3 +180,34 @@ assert.equal(feedbackCall.body.comment, "还没用过导出");
 assert.equal(surveyClient.debugState().feedbackQueue.length, 0);
 surveyClient.stop();
 console.log("ok sdk exit survey");
+
+const failedSent: unknown[][] = [];
+const failed = createPayLens({
+  storage: memoryStorage(),
+  fetch: async (_input, init) => {
+    failedSent.push(JSON.parse(String(init?.body)) as unknown[]);
+    return response(200, { accepted: 1, rejected: [] });
+  },
+  now: () => new Date("2026-09-22T08:00:00.000Z"),
+  createId: () => "88888888-8888-4888-8888-888888888888",
+  readAppVersion: () => "1.0.0",
+  platform: "ios",
+  autoFlush: false,
+});
+failed.init({ clientKey: "pl_pub_failed", paywallVersion: "A" });
+await failed.flush();
+failed.track("paywall_viewed");
+failed.track("purchase_failed");
+failed.track("purchase_failed", { productId: "pro_monthly", failureKind: "payment_error" });
+failed.track("paywall_closed");
+assert.equal(failed.shouldShowExitSurvey(), true);
+await failed.flush();
+const failedEvents = (failedSent[0] as { events: Array<{ event_name: string; failure_kind?: string; sdk_version?: string }> }).events;
+assert.deepEqual(
+  failedEvents.map((event) => event.event_name),
+  ["paywall_viewed", "purchase_failed", "paywall_closed"],
+);
+assert.equal(failedEvents[1]?.failure_kind, "payment_error");
+assert.equal(failedEvents.every((event) => event.sdk_version === "0.2.0"), true);
+failed.stop();
+console.log("ok sdk purchase_failed");
