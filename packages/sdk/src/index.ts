@@ -75,7 +75,36 @@ export type PayLensDeps = {
   initialBackoffMs?: number;
 };
 
+function memoryStorage(): KeyValueStorage {
+  const items = new Map<string, string>();
+  return {
+    async getItem(key) {
+      return items.get(key) ?? null;
+    },
+    async setItem(key, value) {
+      items.set(key, value);
+    },
+  };
+}
+
+function hasAsyncStorageNative() {
+  try {
+    const reactNative = require("react-native") as {
+      NativeModules?: { RNCAsyncStorage?: unknown };
+      TurboModuleRegistry?: { get?: (name: string) => unknown };
+    };
+    if (reactNative.NativeModules?.RNCAsyncStorage) return true;
+    return Boolean(reactNative.TurboModuleRegistry?.get?.("RNCAsyncStorage"));
+  } catch {
+    return false;
+  }
+}
+
 function loadAsyncStorage(): KeyValueStorage {
+  if (!hasAsyncStorageNative()) {
+    console.warn("[PayLens] 当前安装包没有 AsyncStorage，本次运行只把队列放在内存中");
+    return memoryStorage();
+  }
   try {
     const mod = require("@react-native-async-storage/async-storage") as { default?: KeyValueStorage } & KeyValueStorage;
     const storage = mod.default ?? mod;
@@ -84,9 +113,8 @@ function loadAsyncStorage(): KeyValueStorage {
     }
     return storage;
   } catch {
-    throw new Error(
-      "请安装 @react-native-async-storage/async-storage：pnpm add @react-native-async-storage/async-storage",
-    );
+    console.warn("[PayLens] 当前安装包没有 AsyncStorage，本次运行只把队列放在内存中");
+    return memoryStorage();
   }
 }
 
